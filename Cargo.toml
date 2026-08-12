@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/extrem_ecs",
+    "crates/extrem_math",
+    "crates/extrem_app",
+    "crates/extrem_render",
+    "crates/extrem_scene",
+    "crates/extrem_science",
+    "crates/extrem_engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+authors = ["Memorithm"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

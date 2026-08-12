@@ -1,0 +1,17 @@
+[package]
+name = "extrem_engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "High-level engine facade for ExtremEngine"
+
+[dependencies]
+extrem_app = { path = "../extrem_app" }
+extrem_ecs = { path = "../extrem_ecs" }
+extrem_math = { path = "../extrem_math" }
+extrem_render = { path = "../extrem_render" }
+extrem_scene = { path = "../extrem_scene" }
+
+[lints]
+workspace = true

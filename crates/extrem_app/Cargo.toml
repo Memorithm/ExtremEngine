@@ -1,0 +1,13 @@
+[package]
+name = "extrem_app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Application lifecycle and schedules for ExtremEngine"
+
+[dependencies]
+extrem_ecs = { path = "../extrem_ecs" }
+
+[lints]
+workspace = true

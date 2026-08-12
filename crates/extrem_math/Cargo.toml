@@ -1,0 +1,10 @@
+[package]
+name = "extrem_math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core math types for ExtremEngine"
+
+[lints]
+workspace = true

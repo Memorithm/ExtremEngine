@@ -1,0 +1,10 @@
+[package]
+name = "extrem_science"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Optional scientific simulation primitives for ExtremEngine"
+
+[lints]
+workspace = true
