@@ -32,7 +32,7 @@ cargo run -p extrem_engine --example sandbox
 
 ## Direction technique
 
-Le code est écrit à partir de contrats propres à ExtremEngine. L’archive Bevy fournie sert de référence d’architecture et de conception ; aucun fichier Bevy n’est copié dans ce workspace. Le dépôt GitHub cible `Memorithm/ExtremEngine` est encore vide au moment de cette première initialisation.
+Le code est écrit à partir de contrats propres à ExtremEngine. L’archive Bevy fournie sert de référence d’architecture et de conception ; aucun fichier Bevy n’est copié dans ce workspace. Le dépôt public `Memorithm/ExtremEngine` héberge cette première version du noyau.
 
 Le module scientifique n’active pas encore une dépendance `scirust` par défaut. Il expose une interface minimale afin de pouvoir brancher une bibliothèque de calcul spécialisée lorsqu’un besoin concret — intégration ODE, algèbre linéaire, champs, optimisation ou ML — sera défini.
 
