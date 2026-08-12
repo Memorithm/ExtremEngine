@@ -48,6 +48,40 @@ pub fn euler_step<S: DynamicalSystem>(
     Ok(())
 }
 
+/// Performs one classical fourth-order Runge-Kutta step.
+pub fn rk4_step<S: DynamicalSystem>(
+    system: &S,
+    time: f64,
+    step: f64,
+    state: &mut [f64],
+) -> Result<(), SimulationError> {
+    if step <= 0.0 {
+        return Err(SimulationError::NonPositiveStep);
+    }
+    let mut k1 = vec![0.0; state.len()];
+    let mut k2 = vec![0.0; state.len()];
+    let mut k3 = vec![0.0; state.len()];
+    let mut k4 = vec![0.0; state.len()];
+    let mut scratch = state.to_vec();
+    system.derivative(time, state, &mut k1);
+    for ((value, original), slope) in scratch.iter_mut().zip(state.iter()).zip(k1.iter()) {
+        *value = *original + slope * step * 0.5;
+    }
+    system.derivative(time + step * 0.5, &scratch, &mut k2);
+    for ((value, original), slope) in scratch.iter_mut().zip(state.iter()).zip(k2.iter()) {
+        *value = *original + slope * step * 0.5;
+    }
+    system.derivative(time + step * 0.5, &scratch, &mut k3);
+    for ((value, original), slope) in scratch.iter_mut().zip(state.iter()).zip(k3.iter()) {
+        *value = *original + slope * step;
+    }
+    system.derivative(time + step, &scratch, &mut k4);
+    for index in 0..state.len() {
+        state[index] += step * (k1[index] + 2.0 * k2[index] + 2.0 * k3[index] + k4[index]) / 6.0;
+    }
+    Ok(())
+}
+
 /// Tracks simulation time independently from render time.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SimulationClock {
@@ -68,7 +102,7 @@ impl SimulationClock {
 
 #[cfg(test)]
 mod tests {
-    use super::{DynamicalSystem, SimulationError, euler_step};
+    use super::{DynamicalSystem, SimulationError, euler_step, rk4_step};
 
     struct ConstantAcceleration;
 
@@ -92,5 +126,12 @@ mod tests {
             euler_step(&ConstantAcceleration, 0.0, 0.0, &mut state),
             Err(SimulationError::NonPositiveStep)
         );
+    }
+
+    #[test]
+    fn rk4_step_integrates_constant_acceleration() {
+        let mut state = [1.0];
+        rk4_step(&ConstantAcceleration, 0.0, 0.5, &mut state).expect("valid step");
+        assert!((state[0] - 2.0).abs() < 0.000_001);
     }
 }

@@ -1,13 +1,10 @@
 [package]
-name = "extrem_math"
+name = "extrem_input"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Core math types for ExtremEngine"
-
-[dependencies]
-serde.workspace = true
+description = "Platform-neutral input state for ExtremEngine"
 
 [lints]
 workspace = true

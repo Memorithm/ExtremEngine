@@ -1,16 +1,15 @@
 [package]
-name = "extrem_scene"
+name = "extrem_editor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Scene components and helpers for ExtremEngine"
+description = "Headless editor commands and inspection tools for ExtremEngine"
 
 [dependencies]
 extrem_ecs = { path = "../extrem_ecs" }
 extrem_math = { path = "../extrem_math" }
-ron.workspace = true
-serde.workspace = true
+extrem_scene = { path = "../extrem_scene" }
 
 [lints]
 workspace = true

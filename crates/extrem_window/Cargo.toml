@@ -1,13 +1,13 @@
 [package]
-name = "extrem_math"
+name = "extrem_window"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Core math types for ExtremEngine"
+description = "Cross-platform window/event-loop host for ExtremEngine"
 
 [dependencies]
-serde.workspace = true
+winit = "0.30.13"
 
 [lints]
 workspace = true

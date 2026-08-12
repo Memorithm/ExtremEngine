@@ -4,10 +4,17 @@ members = [
     "crates/extrem_ecs",
     "crates/extrem_math",
     "crates/extrem_app",
+    "crates/extrem_assets",
+    "crates/extrem_audio",
     "crates/extrem_render",
+    "crates/extrem_physics",
     "crates/extrem_scene",
     "crates/extrem_science",
     "crates/extrem_engine",
+    "crates/extrem_editor",
+    "crates/extrem_gpu",
+    "crates/extrem_input",
+    "crates/extrem_window",
 ]
 
 [workspace.package]
@@ -16,6 +23,10 @@ edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 authors = ["Memorithm"]
+
+[workspace.dependencies]
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

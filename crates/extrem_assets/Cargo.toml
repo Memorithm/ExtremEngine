@@ -1,13 +1,10 @@
 [package]
-name = "extrem_math"
+name = "extrem_assets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Core math types for ExtremEngine"
-
-[dependencies]
-serde.workspace = true
+description = "Typed asset handles and registries for ExtremEngine"
 
 [lints]
 workspace = true

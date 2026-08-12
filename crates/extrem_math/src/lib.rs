@@ -1,7 +1,9 @@
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 
+use serde::{Deserialize, Serialize};
+
 /// Three-dimensional vector used by engine transforms and simulation code.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,
@@ -106,7 +108,7 @@ impl Div<f32> for Vec3 {
 }
 
 /// Position, Euler rotation and scale of an entity in local space.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Transform {
     pub translation: Vec3,
     pub rotation: Vec3,
@@ -154,9 +156,99 @@ impl Transform {
     }
 }
 
+/// Compact column-major 4x4 matrix for camera and render extraction.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Mat4 {
+    pub data: [f32; 16],
+}
+
+impl Mat4 {
+    pub const IDENTITY: Self = Self {
+        data: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    };
+
+    pub fn translation(offset: Vec3) -> Self {
+        let mut matrix = Self::IDENTITY;
+        matrix.data[12] = offset.x;
+        matrix.data[13] = offset.y;
+        matrix.data[14] = offset.z;
+        matrix
+    }
+
+    pub fn scale(scale: Vec3) -> Self {
+        let mut matrix = Self::IDENTITY;
+        matrix.data[0] = scale.x;
+        matrix.data[5] = scale.y;
+        matrix.data[10] = scale.z;
+        matrix
+    }
+
+    pub fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y_radians * 0.5).tan();
+        let inverse_depth = 1.0 / (near - far);
+        Self {
+            data: [
+                f / aspect,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                (far + near) * inverse_depth,
+                -1.0,
+                0.0,
+                0.0,
+                (2.0 * far * near) * inverse_depth,
+                0.0,
+            ],
+        }
+    }
+
+    pub fn orthographic(width: f32, height: f32, near: f32, far: f32) -> Self {
+        Self {
+            data: [
+                2.0 / width,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0 / height,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0 / (near - far),
+                0.0,
+                0.0,
+                0.0,
+                near / (near - far),
+                1.0,
+            ],
+        }
+    }
+
+    pub fn multiply(self, rhs: Self) -> Self {
+        let mut output = [0.0; 16];
+        for column in 0..4 {
+            for row in 0..4 {
+                output[column * 4 + row] = (0..4)
+                    .map(|index| self.data[index * 4 + row] * rhs.data[column * 4 + index])
+                    .sum();
+            }
+        }
+        Self { data: output }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Vec3;
+    use super::{Mat4, Vec3};
 
     #[test]
     fn vector_operations_are_predictable() {
@@ -167,5 +259,11 @@ mod tests {
             Vec3::new(1.0, 0.0, 0.0).cross(Vec3::new(0.0, 1.0, 0.0)),
             Vec3::new(0.0, 0.0, 1.0)
         );
+    }
+
+    #[test]
+    fn matrix_multiplication_preserves_identity() {
+        let matrix = Mat4::translation(Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(matrix.multiply(Mat4::IDENTITY), matrix);
     }
 }

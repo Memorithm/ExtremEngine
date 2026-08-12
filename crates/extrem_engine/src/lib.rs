@@ -3,12 +3,24 @@ use std::collections::HashSet;
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
 use extrem_math::Transform;
-use extrem_render::{FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand};
+use extrem_render::{
+    FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
+};
 use extrem_scene::propagate_transforms;
 
 pub use extrem_app::{Stage, Time};
+pub use extrem_assets::{AssetError, AssetId, Assets, Handle};
+pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
 pub use extrem_ecs::{Entity, WorldError};
-pub use extrem_scene::{Children, GlobalTransform, Name, Parent, Scene, Velocity, Visibility};
+pub use extrem_editor::{EditorCommand, EditorError, EditorState, InspectorSnapshot};
+pub use extrem_gpu::{GpuContext, GpuError};
+pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
+pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
+pub use extrem_scene::{
+    Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
+    SceneFormatError, SceneNode, Velocity, Visibility,
+};
+pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
 /// Configuration for the high-level engine facade.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,6 +28,7 @@ pub struct EngineConfig {
     pub target_delta_seconds: f32,
     pub fixed_delta_seconds: f32,
     pub max_fixed_steps_per_frame: u32,
+    pub viewport_aspect: f32,
 }
 
 impl Default for EngineConfig {
@@ -24,6 +37,7 @@ impl Default for EngineConfig {
             target_delta_seconds: 1.0 / 60.0,
             fixed_delta_seconds: 1.0 / 60.0,
             max_fixed_steps_per_frame: 8,
+            viewport_aspect: 16.0 / 9.0,
         }
     }
 }
@@ -34,6 +48,7 @@ pub struct Engine<R: RenderBackend = NullRenderer> {
     renderer: R,
     config: EngineConfig,
     last_frame_stats: FrameStats,
+    last_render_passes: Vec<String>,
 }
 
 impl Engine<NullRenderer> {
@@ -52,6 +67,7 @@ impl<R: RenderBackend> Engine<R> {
     pub fn with_renderer(renderer: R, config: EngineConfig) -> Self {
         let mut app = App::new();
         app.add_plugin(MinimalPlugins);
+        app.add_plugin(extrem_physics::PhysicsPlugin);
         app.set_fixed_timestep(config.fixed_delta_seconds)
             .set_max_fixed_steps_per_frame(config.max_fixed_steps_per_frame)
             .add_systems(extrem_app::Stage::PostUpdate, |world, _| {
@@ -62,6 +78,7 @@ impl<R: RenderBackend> Engine<R> {
             renderer,
             config,
             last_frame_stats: FrameStats::default(),
+            last_render_passes: Vec::new(),
         }
     }
 
@@ -99,6 +116,40 @@ impl<R: RenderBackend> Engine<R> {
             index: report.frame,
             delta_seconds: report.delta_seconds,
         });
+        let mut graph = RenderGraph::new();
+        let clear = graph.add_pass("clear");
+        let main = graph.add_pass("main");
+        let ui = graph.add_pass("ui");
+        let _ = graph.add_dependency(main, clear);
+        let _ = graph.add_dependency(ui, main);
+        self.last_render_passes = graph
+            .compile()
+            .expect("the engine render graph is acyclic")
+            .iter()
+            .filter_map(|pass| graph.pass_name(*pass).map(str::to_owned))
+            .collect();
+
+        let active_camera = self
+            .world()
+            .iter::<Camera>()
+            .filter(|(_, camera)| camera.active)
+            .find_map(|(entity, camera)| {
+                let transform = self
+                    .world()
+                    .get::<GlobalTransform>(entity)
+                    .map(|global| global.0)
+                    .or_else(|| self.world().get::<Transform>(entity).copied())?;
+                Some((
+                    entity,
+                    camera.view_projection(transform, self.config.viewport_aspect),
+                ))
+            });
+        if let Some((entity, view_projection)) = active_camera {
+            self.renderer.submit(RenderCommand::SetCamera {
+                entity,
+                view_projection,
+            });
+        }
         let global_entities: HashSet<_> = self
             .world()
             .iter::<GlobalTransform>()
@@ -125,6 +176,9 @@ impl<R: RenderBackend> Engine<R> {
             self.renderer.submit(command);
         }
         self.last_frame_stats = self.renderer.end_frame();
+        if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
+            input.end_frame();
+        }
         report
     }
 
@@ -137,11 +191,15 @@ impl<R: RenderBackend> Engine<R> {
     pub fn last_frame_stats(&self) -> FrameStats {
         self.last_frame_stats
     }
+
+    pub fn last_render_passes(&self) -> &[String] {
+        &self.last_render_passes
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Stage};
+    use super::{Camera, Engine, Input, KeyCode, Stage};
     use extrem_math::{Transform, Vec3};
     use extrem_scene::Velocity;
 
@@ -176,5 +234,44 @@ mod tests {
             .translation;
         assert!((position.x - 2.0 / 60.0).abs() < 0.000_01);
         assert_eq!(engine.last_frame_stats().submitted_commands, 1);
+    }
+
+    #[test]
+    fn engine_extracts_active_camera_and_closes_input_frame() {
+        let mut engine = Engine::new();
+        let entity = engine.world_mut().spawn_empty();
+        engine
+            .world_mut()
+            .insert(entity, Transform::default())
+            .expect("entity is alive");
+        engine
+            .world_mut()
+            .insert(entity, Camera::default())
+            .expect("entity is alive");
+        let mut input = Input::default();
+        input.keys.press(KeyCode::Space);
+        engine.world_mut().insert_resource(input);
+        engine.app_mut().add_systems(Stage::Update, |world, _| {
+            assert!(
+                world
+                    .get_resource::<Input>()
+                    .expect("input resource")
+                    .keys
+                    .just_pressed(KeyCode::Space)
+            );
+        });
+
+        engine.tick(1.0 / 60.0);
+
+        assert_eq!(engine.last_frame_stats().submitted_commands, 2);
+        assert_eq!(engine.last_render_passes(), ["clear", "main", "ui"]);
+        assert!(
+            !engine
+                .world()
+                .get_resource::<Input>()
+                .expect("input resource")
+                .keys
+                .just_pressed(KeyCode::Space)
+        );
     }
 }

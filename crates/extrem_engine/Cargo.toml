@@ -8,10 +8,17 @@ description = "High-level engine facade for ExtremEngine"
 
 [dependencies]
 extrem_app = { path = "../extrem_app" }
+extrem_assets = { path = "../extrem_assets" }
+extrem_audio = { path = "../extrem_audio" }
 extrem_ecs = { path = "../extrem_ecs" }
+extrem_editor = { path = "../extrem_editor" }
+extrem_input = { path = "../extrem_input" }
 extrem_math = { path = "../extrem_math" }
+extrem_physics = { path = "../extrem_physics" }
 extrem_render = { path = "../extrem_render" }
 extrem_scene = { path = "../extrem_scene" }
+extrem_gpu = { path = "../extrem_gpu" }
+extrem_window = { path = "../extrem_window" }
 
 [lints]
 workspace = true
