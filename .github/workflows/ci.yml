@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@a543b44c1d5f964ecb95d4e32884c93f2f839ee4 # stable
-      - uses: EmbarkStudios/cargo-deny-action@83712f5509714e8a15998b671a5472eb8b80e462 # v2.0.10
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+      - uses: EmbarkStudios/cargo-deny-action@9c67a826e39827395bfa619cd85cb2aaeb43cfaa # main
       - name: Formatting Check
         run: cargo fmt --all -- --check
       - name: Clippy Lints
@@ -36,7 +36,7 @@ jobs:
         rust: ["1.85", "stable"]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@a543b44c1d5f964ecb95d4e32884c93f2f839ee4 # master/stable
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: ${{ matrix.rust }}
       - name: Cargo Check
