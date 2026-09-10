@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 use extrem_input::{Input, KeyCode, MouseButton};
 use winit::application::ApplicationHandler;
@@ -46,7 +47,6 @@ impl Display for WindowError {
 
 impl Error for WindowError {}
 
-/// Translates a native event into the engine's platform-neutral input state.
 pub fn process_window_event(input: &mut Input, event: &WindowEvent) {
     match event {
         WindowEvent::KeyboardInput { event, .. } => {
@@ -118,10 +118,10 @@ impl WindowHost {
         Self::run_with_input(config, move |_window, _input| on_frame())
     }
 
-    /// Runs a frame callback with the real window and all input accumulated since the previous frame.
+    /// Provides an owned `Arc<Window>` so a renderer may safely retain a WGPU surface target.
     pub fn run_with_input(
         config: WindowConfig,
-        on_frame: impl FnMut(&Window, &mut Input) + 'static,
+        on_frame: impl FnMut(&Arc<Window>, &mut Input) + 'static,
     ) -> Result<(), WindowError> {
         let event_loop = EventLoop::new().map_err(WindowError::EventLoop)?;
         let mut application = WindowApplication {
@@ -138,11 +138,11 @@ impl WindowHost {
     }
 }
 
-type WindowFrameCallback = Box<dyn FnMut(&Window, &mut Input)>;
+type WindowFrameCallback = Box<dyn FnMut(&Arc<Window>, &mut Input)>;
 
 struct WindowApplication {
     config: WindowConfig,
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     input: Input,
     on_frame: WindowFrameCallback,
     error: Option<WindowError>,
@@ -157,7 +157,7 @@ impl ApplicationHandler for WindowApplication {
             .with_title(self.config.title.clone())
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
         match event_loop.create_window(attributes) {
-            Ok(window) => self.window = Some(window),
+            Ok(window) => self.window = Some(Arc::new(window)),
             Err(error) => {
                 self.error = Some(WindowError::Create(error));
                 event_loop.exit();
@@ -179,7 +179,6 @@ impl ApplicationHandler for WindowApplication {
         }
 
         process_window_event(&mut self.input, &event);
-
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
@@ -224,7 +223,6 @@ mod tests {
         );
         assert_eq!(input.mouse.position, (100.0, 200.0));
         assert_eq!(input.mouse.delta, (100.0, 200.0));
-
         process_window_event(
             &mut input,
             &WindowEvent::MouseWheel {
