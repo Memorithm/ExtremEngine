@@ -32,9 +32,18 @@ pub enum AnimationError {
     NonFiniteTime,
     NonFiniteValue,
     InvalidQuaternion,
-    JointOutOfRange { joint: usize, skeleton_len: usize },
-    PoseLengthMismatch { left: usize, right: usize },
-    PoseSkeletonMismatch { pose_len: usize, skeleton_len: usize },
+    JointOutOfRange {
+        joint: usize,
+        skeleton_len: usize,
+    },
+    PoseLengthMismatch {
+        left: usize,
+        right: usize,
+    },
+    PoseSkeletonMismatch {
+        pose_len: usize,
+        skeleton_len: usize,
+    },
     InvalidBlendWeight,
     InvalidPlaybackRate,
     InvalidDeltaTime,
@@ -44,28 +53,60 @@ impl fmt::Display for AnimationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTransform => write!(formatter, "transform contains invalid numeric data"),
-            Self::InvalidInverseBindMatrix => write!(formatter, "inverse bind matrix contains NaN or infinity"),
-            Self::InvalidParentIndex(index) => write!(formatter, "joint parent index {index} is out of bounds"),
-            Self::NonTopologicalParent => write!(formatter, "parent index must be smaller than joint index"),
-            Self::InvalidDuration => write!(formatter, "clip duration must be finite and non-negative"),
-            Self::UnsortedKeyframes => write!(formatter, "keyframes must be strictly sorted by time"),
-            Self::DuplicateKeyframeTime => write!(formatter, "duplicate keyframe times are not allowed"),
+            Self::InvalidInverseBindMatrix => {
+                write!(formatter, "inverse bind matrix contains NaN or infinity")
+            }
+            Self::InvalidParentIndex(index) => {
+                write!(formatter, "joint parent index {index} is out of bounds")
+            }
+            Self::NonTopologicalParent => {
+                write!(formatter, "parent index must be smaller than joint index")
+            }
+            Self::InvalidDuration => {
+                write!(formatter, "clip duration must be finite and non-negative")
+            }
+            Self::UnsortedKeyframes => {
+                write!(formatter, "keyframes must be strictly sorted by time")
+            }
+            Self::DuplicateKeyframeTime => {
+                write!(formatter, "duplicate keyframe times are not allowed")
+            }
             Self::KeyframeAfterDuration => write!(formatter, "keyframe time exceeds clip duration"),
             Self::NonFiniteTime => write!(formatter, "animation time must be finite"),
             Self::NonFiniteValue => write!(formatter, "animation value contains NaN or infinity"),
-            Self::InvalidQuaternion => write!(formatter, "animation quaternion must be finite and normalized"),
-            Self::JointOutOfRange { joint, skeleton_len } => {
-                write!(formatter, "track joint {joint} is outside skeleton length {skeleton_len}")
+            Self::InvalidQuaternion => write!(
+                formatter,
+                "animation quaternion must be finite and normalized"
+            ),
+            Self::JointOutOfRange {
+                joint,
+                skeleton_len,
+            } => {
+                write!(
+                    formatter,
+                    "track joint {joint} is outside skeleton length {skeleton_len}"
+                )
             }
             Self::PoseLengthMismatch { left, right } => {
                 write!(formatter, "pose lengths differ: {left} versus {right}")
             }
-            Self::PoseSkeletonMismatch { pose_len, skeleton_len } => {
-                write!(formatter, "pose length {pose_len} does not match skeleton length {skeleton_len}")
+            Self::PoseSkeletonMismatch {
+                pose_len,
+                skeleton_len,
+            } => {
+                write!(
+                    formatter,
+                    "pose length {pose_len} does not match skeleton length {skeleton_len}"
+                )
             }
             Self::InvalidBlendWeight => write!(formatter, "blend weight must be finite"),
-            Self::InvalidPlaybackRate => write!(formatter, "animation playback rate must be finite"),
-            Self::InvalidDeltaTime => write!(formatter, "animation delta time must be finite and non-negative"),
+            Self::InvalidPlaybackRate => {
+                write!(formatter, "animation playback rate must be finite")
+            }
+            Self::InvalidDeltaTime => write!(
+                formatter,
+                "animation delta time must be finite and non-negative"
+            ),
         }
     }
 }
@@ -90,7 +131,12 @@ impl Skeleton {
             if !joint.bind_pose.is_valid() {
                 return Err(AnimationError::InvalidTransform);
             }
-            if !joint.inverse_bind_matrix.data.iter().all(|value| value.is_finite()) {
+            if !joint
+                .inverse_bind_matrix
+                .data
+                .iter()
+                .all(|value| value.is_finite())
+            {
                 return Err(AnimationError::InvalidInverseBindMatrix);
             }
             if let Some(parent) = joint.parent {
@@ -187,15 +233,21 @@ impl AnimationClip {
 
         for track in translation_tracks.iter().chain(scale_tracks.iter()) {
             track.validate_times(duration)?;
-            if track.keyframes.iter().any(|keyframe| !keyframe.value.is_finite()) {
+            if track
+                .keyframes
+                .iter()
+                .any(|keyframe| !keyframe.value.is_finite())
+            {
                 return Err(AnimationError::NonFiniteValue);
             }
         }
         for track in &rotation_tracks {
             track.validate_times(duration)?;
-            if track.keyframes.iter().any(|keyframe| {
-                !keyframe.value.is_normalized(QUATERNION_NORM_TOLERANCE)
-            }) {
+            if track
+                .keyframes
+                .iter()
+                .any(|keyframe| !keyframe.value.is_normalized(QUATERNION_NORM_TOLERANCE))
+            {
                 return Err(AnimationError::InvalidQuaternion);
             }
         }
@@ -237,7 +289,11 @@ pub struct LocalPose {
 impl LocalPose {
     pub fn from_bind_pose(skeleton: &Skeleton) -> Self {
         Self {
-            transforms: skeleton.joints().iter().map(|joint| joint.bind_pose).collect(),
+            transforms: skeleton
+                .joints()
+                .iter()
+                .map(|joint| joint.bind_pose)
+                .collect(),
         }
     }
 
@@ -248,7 +304,11 @@ impl LocalPose {
                 skeleton_len: skeleton.len(),
             });
         }
-        if self.transforms.iter().any(|transform| !transform.is_valid()) {
+        if self
+            .transforms
+            .iter()
+            .any(|transform| !transform.is_valid())
+        {
             return Err(AnimationError::InvalidTransform);
         }
         Ok(())
@@ -261,7 +321,10 @@ pub struct ModelPose {
 }
 
 impl ModelPose {
-    pub fn from_local_pose(local_pose: &LocalPose, skeleton: &Skeleton) -> Result<Self, AnimationError> {
+    pub fn from_local_pose(
+        local_pose: &LocalPose,
+        skeleton: &Skeleton,
+    ) -> Result<Self, AnimationError> {
         local_pose.validate_for_skeleton(skeleton)?;
         let mut model_transforms = Vec::with_capacity(skeleton.len());
         for (index, joint) in skeleton.joints().iter().enumerate() {
@@ -321,7 +384,10 @@ fn sample_vec3_track(track: &Track<Vec3>, time: f32, default: Vec3) -> Vec3 {
     if track.keyframes.len() == 1 || time <= first.time {
         return first.value;
     }
-    let last = track.keyframes.last().expect("non-empty track established above");
+    let last = track
+        .keyframes
+        .last()
+        .expect("non-empty track established above");
     if time >= last.time {
         return last.value;
     }
@@ -346,7 +412,10 @@ fn sample_quat_track(track: &Track<Quat>, time: f32, default: Quat) -> Quat {
     if track.keyframes.len() == 1 || time <= first.time {
         return first.value;
     }
-    let last = track.keyframes.last().expect("non-empty track established above");
+    let last = track
+        .keyframes
+        .last()
+        .expect("non-empty track established above");
     if time >= last.time {
         return last.value;
     }
@@ -469,7 +538,10 @@ impl AnimationPlayer {
     }
 }
 
-pub fn update_animation_players(world: &mut World, delta_seconds: f32) -> Result<(), AnimationError> {
+pub fn update_animation_players(
+    world: &mut World,
+    delta_seconds: f32,
+) -> Result<(), AnimationError> {
     for (_entity, player) in world.iter_mut::<AnimationPlayer>() {
         player.advance(delta_seconds)?;
     }
@@ -505,7 +577,8 @@ pub mod adaptive {
             state: &Self::State,
             plan: &Self::Plan,
         ) -> Result<(), Self::Error>;
-        fn commit(&mut self, state: &mut Self::State, plan: &Self::Plan) -> Result<(), Self::Error>;
+        fn commit(&mut self, state: &mut Self::State, plan: &Self::Plan)
+        -> Result<(), Self::Error>;
         fn rollback(
             &mut self,
             state: &mut Self::State,
@@ -578,8 +651,14 @@ mod tests {
             joint: JointId(0),
             interpolation: InterpolationMode::Linear,
             keyframes: vec![
-                Keyframe { time: 0.0, value: Vec3::ZERO },
-                Keyframe { time: 0.0, value: Vec3::ONE },
+                Keyframe {
+                    time: 0.0,
+                    value: Vec3::ZERO,
+                },
+                Keyframe {
+                    time: 0.0,
+                    value: Vec3::ONE,
+                },
             ],
         };
         assert_eq!(
@@ -607,12 +686,19 @@ mod tests {
         let track = Track {
             joint: JointId(7),
             interpolation: InterpolationMode::Linear,
-            keyframes: vec![Keyframe { time: 0.0, value: Vec3::ZERO }],
+            keyframes: vec![Keyframe {
+                time: 0.0,
+                value: Vec3::ZERO,
+            }],
         };
-        let clip = AnimationClip::new("bad joint", 1.0, vec![track], vec![], vec![]).expect("clip shape");
+        let clip =
+            AnimationClip::new("bad joint", 1.0, vec![track], vec![], vec![]).expect("clip shape");
         assert_eq!(
             sample_clip(&clip, &skeleton, 0.0, false),
-            Err(AnimationError::JointOutOfRange { joint: 7, skeleton_len: 1 })
+            Err(AnimationError::JointOutOfRange {
+                joint: 7,
+                skeleton_len: 1
+            })
         );
     }
 
@@ -623,8 +709,14 @@ mod tests {
             joint: JointId(0),
             interpolation: InterpolationMode::Linear,
             keyframes: vec![
-                Keyframe { time: 0.0, value: Vec3::ZERO },
-                Keyframe { time: 1.0, value: Vec3::new(10.0, 0.0, 0.0) },
+                Keyframe {
+                    time: 0.0,
+                    value: Vec3::ZERO,
+                },
+                Keyframe {
+                    time: 1.0,
+                    value: Vec3::new(10.0, 0.0, 0.0),
+                },
             ],
         };
         let clip = AnimationClip::new("walk", 1.0, vec![track], vec![], vec![]).expect("clip");
@@ -637,7 +729,9 @@ mod tests {
 
     #[test]
     fn pose_length_mismatch_fails_closed() {
-        let a = LocalPose { transforms: vec![Transform::IDENTITY] };
+        let a = LocalPose {
+            transforms: vec![Transform::IDENTITY],
+        };
         let b = LocalPose { transforms: vec![] };
         assert_eq!(
             blend_poses(&a, &b, 0.5),
@@ -647,9 +741,15 @@ mod tests {
 
     #[test]
     fn non_finite_runtime_time_is_rejected() {
-        assert_eq!(clamp_or_loop_time(f32::NAN, 1.0, true), Err(AnimationError::NonFiniteTime));
+        assert_eq!(
+            clamp_or_loop_time(f32::NAN, 1.0, true),
+            Err(AnimationError::NonFiniteTime)
+        );
         let mut player = AnimationPlayer::default();
-        assert_eq!(player.advance(f32::NAN), Err(AnimationError::InvalidDeltaTime));
+        assert_eq!(
+            player.advance(f32::NAN),
+            Err(AnimationError::InvalidDeltaTime)
+        );
     }
 
     #[test]
@@ -670,6 +770,9 @@ mod tests {
         let local_pose = LocalPose::from_bind_pose(&skeleton);
         let model_pose = ModelPose::from_local_pose(&local_pose, &skeleton).expect("model pose");
         assert_eq!(model_pose.transforms[1].translation.y, 3.0);
-        assert_eq!(model_pose.matrix_palette(&skeleton).expect("palette").len(), 2);
+        assert_eq!(
+            model_pose.matrix_palette(&skeleton).expect("palette").len(),
+            2
+        );
     }
 }

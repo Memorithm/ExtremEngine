@@ -32,7 +32,9 @@ pub enum RenderGraphError {
 impl fmt::Display for RenderGraphError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingPass(id) => write!(formatter, "render graph references missing pass {id:?}"),
+            Self::MissingPass(id) => {
+                write!(formatter, "render graph references missing pass {id:?}")
+            }
             Self::Cycle(id) => write!(formatter, "render graph contains a cycle at pass {id:?}"),
         }
     }

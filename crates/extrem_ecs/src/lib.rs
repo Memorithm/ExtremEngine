@@ -83,7 +83,9 @@ impl fmt::Display for WorldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EntityNotFound(entity) => write!(formatter, "{entity} does not exist"),
-            Self::EntityCapacityExhausted => write!(formatter, "entity index capacity is exhausted"),
+            Self::EntityCapacityExhausted => {
+                write!(formatter, "entity index capacity is exhausted")
+            }
         }
     }
 }
@@ -117,7 +119,8 @@ impl World {
             });
         }
 
-        let index = u32::try_from(self.slots.len()).map_err(|_| WorldError::EntityCapacityExhausted)?;
+        let index =
+            u32::try_from(self.slots.len()).map_err(|_| WorldError::EntityCapacityExhausted)?;
         self.slots.push(EntitySlot {
             generation: 1,
             alive: true,
@@ -233,7 +236,12 @@ impl World {
             .get(&TypeId::of::<T>())
             .into_iter()
             .filter_map(|storage| storage.as_any().downcast_ref::<TypedStorage<T>>())
-            .flat_map(|storage| storage.values.iter().map(|(entity, value)| (*entity, value)))
+            .flat_map(|storage| {
+                storage
+                    .values
+                    .iter()
+                    .map(|(entity, value)| (*entity, value))
+            })
     }
 
     /// Mutable iteration order is intentionally unspecified.
@@ -242,7 +250,12 @@ impl World {
             .get_mut(&TypeId::of::<T>())
             .into_iter()
             .filter_map(|storage| storage.as_any_mut().downcast_mut::<TypedStorage<T>>())
-            .flat_map(|storage| storage.values.iter_mut().map(|(entity, value)| (*entity, value)))
+            .flat_map(|storage| {
+                storage
+                    .values
+                    .iter_mut()
+                    .map(|(entity, value)| (*entity, value))
+            })
     }
 
     pub fn entity_count(&self) -> usize {
@@ -291,7 +304,10 @@ mod tests {
         assert_eq!(world.despawn(entity), Ok(()));
         assert!(!world.contains(entity));
         assert_eq!(world.get::<Health>(entity), None);
-        assert_eq!(world.despawn(entity), Err(WorldError::EntityNotFound(entity)));
+        assert_eq!(
+            world.despawn(entity),
+            Err(WorldError::EntityNotFound(entity))
+        );
     }
 
     #[test]
@@ -315,7 +331,9 @@ mod tests {
             retired: false,
         });
         let final_generation = Entity::from_raw_parts(0, u32::MAX);
-        world.despawn(final_generation).expect("despawn final generation");
+        world
+            .despawn(final_generation)
+            .expect("despawn final generation");
         let next = world.try_spawn_empty().expect("new slot");
         assert_ne!(next.index(), final_generation.index());
         assert!(!world.contains(final_generation));
@@ -325,8 +343,14 @@ mod tests {
     fn missing_entities_are_rejected() {
         let mut world = World::new();
         let entity = Entity::from_raw(42);
-        assert_eq!(world.insert(entity, Health(10)), Err(WorldError::EntityNotFound(entity)));
-        assert_eq!(world.remove::<Health>(entity), Err(WorldError::EntityNotFound(entity)));
+        assert_eq!(
+            world.insert(entity, Health(10)),
+            Err(WorldError::EntityNotFound(entity))
+        );
+        assert_eq!(
+            world.remove::<Health>(entity),
+            Err(WorldError::EntityNotFound(entity))
+        );
     }
 
     #[test]

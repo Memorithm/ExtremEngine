@@ -22,7 +22,9 @@ impl fmt::Display for AssetPathError {
             Self::TooLong => write!(formatter, "asset path exceeds {MAX_ASSET_PATH_BYTES} bytes"),
             Self::Absolute => write!(formatter, "absolute asset paths are not allowed"),
             Self::WindowsPrefix => write!(formatter, "Windows drive/UNC prefixes are not allowed"),
-            Self::ParentTraversal => write!(formatter, "asset path attempts to escape its virtual root"),
+            Self::ParentTraversal => {
+                write!(formatter, "asset path attempts to escape its virtual root")
+            }
             Self::NulByte => write!(formatter, "asset path contains a NUL byte"),
         }
     }
@@ -145,7 +147,10 @@ impl<E: fmt::Display> fmt::Display for AssetError<E> {
         match self {
             Self::Loader(error) => write!(formatter, "asset loader failed: {error}"),
             Self::InvalidPath(error) => write!(formatter, "invalid asset path: {error}"),
-            Self::Collision { path, existing_path } => write!(
+            Self::Collision {
+                path,
+                existing_path,
+            } => write!(
                 formatter,
                 "asset ID collision: '{path}' collides with existing '{existing_path}'"
             ),
@@ -237,7 +242,9 @@ impl<T> Assets<T> {
     }
 
     pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
-        self.entries.get_mut(&handle.id).map(|entry| &mut entry.value)
+        self.entries
+            .get_mut(&handle.id)
+            .map(|entry| &mut entry.value)
     }
 
     pub fn state(&self, handle: Handle<T>) -> AssetState {
@@ -332,11 +339,23 @@ mod tests {
 
     #[test]
     fn unsafe_paths_fail_closed() {
-        assert_eq!(normalize_path("../secret.txt"), Err(AssetPathError::ParentTraversal));
-        assert_eq!(normalize_path("../../secret.txt"), Err(AssetPathError::ParentTraversal));
+        assert_eq!(
+            normalize_path("../secret.txt"),
+            Err(AssetPathError::ParentTraversal)
+        );
+        assert_eq!(
+            normalize_path("../../secret.txt"),
+            Err(AssetPathError::ParentTraversal)
+        );
         assert_eq!(normalize_path("/etc/passwd"), Err(AssetPathError::Absolute));
-        assert_eq!(normalize_path("C:\\Game\\secret.txt"), Err(AssetPathError::WindowsPrefix));
-        assert_eq!(normalize_path("\\\\server\\share\\x"), Err(AssetPathError::WindowsPrefix));
+        assert_eq!(
+            normalize_path("C:\\Game\\secret.txt"),
+            Err(AssetPathError::WindowsPrefix)
+        );
+        assert_eq!(
+            normalize_path("\\\\server\\share\\x"),
+            Err(AssetPathError::WindowsPrefix)
+        );
         assert_eq!(normalize_path("bad\0name"), Err(AssetPathError::NulByte));
     }
 
