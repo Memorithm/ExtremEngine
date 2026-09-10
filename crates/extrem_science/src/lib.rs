@@ -148,8 +148,13 @@ pub fn rk4_step_with_workspace<S: DynamicalSystem>(
     system.derivative(time, state, &mut workspace.k1);
     validate_derivative(&workspace.k1)?;
 
-    for index in 0..state.len() {
-        workspace.scratch[index] = state[index] + workspace.k1[index] * step * 0.5;
+    for ((scratch, original), slope) in workspace
+        .scratch
+        .iter_mut()
+        .zip(state.iter().copied())
+        .zip(workspace.k1.iter().copied())
+    {
+        *scratch = original + slope * step * 0.5;
     }
     validate_derivative(&workspace.scratch).map_err(|_| SimulationError::NonFiniteState)?;
 
@@ -157,8 +162,13 @@ pub fn rk4_step_with_workspace<S: DynamicalSystem>(
     system.derivative(half_time, &workspace.scratch, &mut workspace.k2);
     validate_derivative(&workspace.k2)?;
 
-    for index in 0..state.len() {
-        workspace.scratch[index] = state[index] + workspace.k2[index] * step * 0.5;
+    for ((scratch, original), slope) in workspace
+        .scratch
+        .iter_mut()
+        .zip(state.iter().copied())
+        .zip(workspace.k2.iter().copied())
+    {
+        *scratch = original + slope * step * 0.5;
     }
     validate_derivative(&workspace.scratch).map_err(|_| SimulationError::NonFiniteState)?;
 
@@ -166,8 +176,13 @@ pub fn rk4_step_with_workspace<S: DynamicalSystem>(
     system.derivative(half_time, &workspace.scratch, &mut workspace.k3);
     validate_derivative(&workspace.k3)?;
 
-    for index in 0..state.len() {
-        workspace.scratch[index] = state[index] + workspace.k3[index] * step;
+    for ((scratch, original), slope) in workspace
+        .scratch
+        .iter_mut()
+        .zip(state.iter().copied())
+        .zip(workspace.k3.iter().copied())
+    {
+        *scratch = original + slope * step;
     }
     validate_derivative(&workspace.scratch).map_err(|_| SimulationError::NonFiniteState)?;
 
@@ -176,16 +191,21 @@ pub fn rk4_step_with_workspace<S: DynamicalSystem>(
     validate_derivative(&workspace.k4)?;
 
     // Compute into scratch first so a non-finite component cannot leave a partially committed state.
-    for index in 0..state.len() {
-        let weighted = workspace.k1[index]
-            + 2.0 * workspace.k2[index]
-            + 2.0 * workspace.k3[index]
-            + workspace.k4[index];
-        let next = state[index] + step * weighted / 6.0;
+    for (((((scratch, original), k1), k2), k3), k4) in workspace
+        .scratch
+        .iter_mut()
+        .zip(state.iter().copied())
+        .zip(workspace.k1.iter().copied())
+        .zip(workspace.k2.iter().copied())
+        .zip(workspace.k3.iter().copied())
+        .zip(workspace.k4.iter().copied())
+    {
+        let weighted = k1 + 2.0 * k2 + 2.0 * k3 + k4;
+        let next = original + step * weighted / 6.0;
         if !next.is_finite() {
             return Err(SimulationError::NonFiniteState);
         }
-        workspace.scratch[index] = next;
+        *scratch = next;
     }
     state.copy_from_slice(&workspace.scratch);
     Ok(())
