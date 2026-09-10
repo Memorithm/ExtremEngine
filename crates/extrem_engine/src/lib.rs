@@ -13,7 +13,9 @@ pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, H
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
 pub use extrem_ecs::{Entity, WorldError};
 pub use extrem_editor::{EditorCommand, EditorError, EditorState, InspectorSnapshot};
-pub use extrem_gpu::{GpuContext, GpuError};
+pub use extrem_gpu::{
+    GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, WgpuPresenter,
+};
 pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
@@ -21,6 +23,63 @@ pub use extrem_scene::{
     SceneFormatError, SceneNode, Velocity, Visibility,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
+
+/// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
+///
+/// The current GPU path intentionally draws a built-in validation triangle. World mesh/material
+/// rendering is not claimed by this type yet; submitted world commands are counted for diagnostics.
+pub struct WgpuRenderer {
+    presenter: WgpuPresenter,
+    submitted_commands: usize,
+    last_stats: FrameStats,
+    last_surface_status: Option<SurfaceFrameStatus>,
+}
+
+impl WgpuRenderer {
+    pub fn new(presenter: WgpuPresenter) -> Self {
+        Self {
+            presenter,
+            submitted_commands: 0,
+            last_stats: FrameStats::default(),
+            last_surface_status: None,
+        }
+    }
+
+    pub fn presenter(&self) -> &WgpuPresenter {
+        &self.presenter
+    }
+
+    pub fn presenter_mut(&mut self) -> &mut WgpuPresenter {
+        &mut self.presenter
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        self.presenter.resize(width, height)
+    }
+
+    pub fn last_surface_status(&self) -> Option<SurfaceFrameStatus> {
+        self.last_surface_status
+    }
+}
+
+impl RenderBackend for WgpuRenderer {
+    fn begin_frame(&mut self, _info: FrameInfo) {
+        self.submitted_commands = 0;
+    }
+
+    fn submit(&mut self, _command: RenderCommand) {
+        self.submitted_commands = self.submitted_commands.saturating_add(1);
+    }
+
+    fn end_frame(&mut self) -> FrameStats {
+        self.last_surface_status = Some(self.presenter.render_validation_frame());
+        self.last_stats = FrameStats {
+            submitted_commands: self.submitted_commands,
+            drawn_pixels: 0,
+        };
+        self.last_stats
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EngineConfig {
@@ -337,8 +396,6 @@ mod tests {
         engine.world_mut().insert(second, Camera::default()).expect("camera");
         engine.world_mut().insert(first, Camera::default()).expect("camera");
         engine.tick(1.0 / 60.0);
-        // NullRenderer does not expose commands, but this exercises the deterministic min-by-key path
-        // and protects against reverting to `find_map` over HashMap iteration.
         assert!(first < second);
         assert_eq!(engine.last_frame_stats().submitted_commands, 3);
     }
