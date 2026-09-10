@@ -1,7 +1,5 @@
 use extrem_ecs::Entity;
-use extrem_gpu::{GpuContext, GpuError, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
 use extrem_math::{Mat4, Vec3};
-use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,6 +52,7 @@ pub struct CompiledRenderGraph {
     pub execution_order: Vec<RenderPassId>,
 }
 
+/// Backend-neutral deterministic dependency graph with topology-versioned plan caching.
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     passes: Vec<RenderPass>,
@@ -128,8 +127,6 @@ impl RenderGraph {
     }
 
     fn invalidate(&mut self) {
-        // Wrapping only invalidates an optimization cache; it cannot create an incorrect plan because
-        // every mutation also clears cached_plan.
         self.version = self.version.wrapping_add(1);
         self.cached_plan = None;
     }
@@ -309,217 +306,6 @@ impl RenderBackend for CpuRenderer {
     }
 }
 
-const TRIANGLE_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec3f,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    var positions = array<vec2f, 3>(
-        vec2f(0.0, 0.55),
-        vec2f(-0.55, -0.45),
-        vec2f(0.55, -0.45),
-    );
-    var colors = array<vec3f, 3>(
-        vec3f(0.95, 0.25, 0.25),
-        vec3f(0.25, 0.95, 0.35),
-        vec3f(0.25, 0.45, 0.95),
-    );
-    var output: VertexOutput;
-    output.position = vec4f(positions[index], 0.0, 1.0);
-    output.color = colors[index];
-    return output;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-    return vec4f(input.color, 1.0);
-}
-"#;
-
-struct PendingGpuFrame {
-    texture: wgpu::SurfaceTexture,
-    commands: wgpu::CommandBuffer,
-    status: SurfaceFrameStatus,
-}
-
-/// First presentable WGPU backend. It deliberately renders a built-in validation triangle;
-/// world mesh/material extraction remains a later layer rather than being faked here.
-pub struct WgpuRenderer {
-    context: GpuContext,
-    surface: SurfaceTarget,
-    pipeline: wgpu::RenderPipeline,
-    pending: Option<PendingGpuFrame>,
-    submitted_commands: usize,
-    last_stats: FrameStats,
-    last_surface_status: Option<SurfaceFrameStatus>,
-}
-
-impl WgpuRenderer {
-    pub fn for_surface(
-        target: impl Into<wgpu::SurfaceTarget<'static>>,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, GpuError> {
-        let (context, surface) = GpuContext::for_surface(target, width, height)?;
-        Ok(Self::new(context, surface))
-    }
-
-    pub fn new(context: GpuContext, surface: SurfaceTarget) -> Self {
-        let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ExtremEngine validation triangle shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TRIANGLE_SHADER)),
-        });
-        let targets = [Some(wgpu::ColorTargetState {
-            format: surface.format(),
-            blend: Some(wgpu::BlendState::REPLACE),
-            write_mask: wgpu::ColorWrites::ALL,
-        })];
-        let pipeline = context
-            .device()
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("ExtremEngine validation triangle pipeline"),
-                layout: None,
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &targets,
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
-        Self {
-            context,
-            surface,
-            pipeline,
-            pending: None,
-            submitted_commands: 0,
-            last_stats: FrameStats::default(),
-            last_surface_status: None,
-        }
-    }
-
-    pub fn resize(&mut self, width: u32, height: u32) -> bool {
-        // Callers must resize only between frames; pending is dropped first to satisfy WGPU's
-        // requirement that no acquired SurfaceTexture remains alive across configure().
-        self.pending = None;
-        self.surface.resize(self.context.device(), width, height)
-    }
-
-    pub fn last_surface_status(&self) -> Option<SurfaceFrameStatus> {
-        self.last_surface_status
-    }
-
-    pub fn adapter_name(&self) -> String {
-        self.context.adapter_name()
-    }
-
-    fn encode_validation_frame(&self, texture: &wgpu::SurfaceTexture) -> wgpu::CommandBuffer {
-        let view = texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .context
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("ExtremEngine validation frame encoder"),
-            });
-        let color_attachment = Some(wgpu::RenderPassColorAttachment {
-            view: &view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.025,
-                    g: 0.035,
-                    b: 0.055,
-                    a: 1.0,
-                }),
-                store: wgpu::StoreOp::Store,
-            },
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ExtremEngine validation triangle pass"),
-                color_attachments: &[color_attachment],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.draw(0..3, 0..1);
-        }
-        encoder.finish()
-    }
-
-    fn acquire_pending_frame(&mut self) {
-        let mut acquisition = self.surface.acquire_frame();
-        if matches!(
-            acquisition,
-            SurfaceFrame::Unavailable(SurfaceFrameStatus::Lost | SurfaceFrameStatus::Outdated)
-        ) {
-            self.surface.reconfigure(self.context.device());
-            acquisition = self.surface.acquire_frame();
-        }
-
-        match acquisition {
-            SurfaceFrame::Renderable { texture, status } => {
-                let commands = self.encode_validation_frame(&texture);
-                self.last_surface_status = Some(status);
-                self.pending = Some(PendingGpuFrame {
-                    texture,
-                    commands,
-                    status,
-                });
-            }
-            SurfaceFrame::Unavailable(status) => {
-                self.last_surface_status = Some(status);
-                self.pending = None;
-            }
-        }
-    }
-}
-
-impl RenderBackend for WgpuRenderer {
-    fn begin_frame(&mut self, _info: FrameInfo) {
-        self.pending = None;
-        self.submitted_commands = 0;
-        self.acquire_pending_frame();
-    }
-
-    fn submit(&mut self, _command: RenderCommand) {
-        self.submitted_commands = self.submitted_commands.saturating_add(1);
-    }
-
-    fn end_frame(&mut self) -> FrameStats {
-        if let Some(frame) = self.pending.take() {
-            self.context.queue().submit(Some(frame.commands));
-            self.context.queue().present(frame.texture);
-            if frame.status == SurfaceFrameStatus::Suboptimal {
-                self.surface.reconfigure(self.context.device());
-            }
-        }
-        self.last_stats = FrameStats {
-            submitted_commands: self.submitted_commands,
-            drawn_pixels: 0,
-        };
-        self.last_stats
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -539,8 +325,7 @@ mod tests {
         let compiled = graph.compile().expect("acyclic graph");
         assert_eq!(compiled.execution_order, vec![clear, opaque, ui]);
         assert_eq!(graph.cached_plan(), Some(&compiled));
-        let cached = graph.compile().expect("cached graph");
-        assert_eq!(compiled, cached);
+        assert_eq!(graph.compile().expect("cached graph"), compiled);
     }
 
     #[test]
