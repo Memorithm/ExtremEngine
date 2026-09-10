@@ -391,6 +391,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "extrem_animation"
+version = "0.1.0"
+dependencies = [
+ "extrem_ecs",
+ "extrem_math",
+ "serde",
+]
+
+[[package]]
 name = "extrem_app"
 version = "0.1.0"
 dependencies = [
@@ -494,6 +503,7 @@ version = "0.1.0"
 name = "extrem_window"
 version = "0.1.0"
 dependencies = [
+ "extrem_input",
  "winit",
 ]
 

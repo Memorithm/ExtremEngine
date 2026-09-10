@@ -125,6 +125,7 @@ impl<R: RenderBackend> Engine<R> {
         self.last_render_passes = graph
             .compile()
             .expect("the engine render graph is acyclic")
+            .execution_order
             .iter()
             .filter_map(|pass| graph.pass_name(*pass).map(str::to_owned))
             .collect();

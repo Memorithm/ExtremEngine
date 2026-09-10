@@ -2,6 +2,7 @@ use extrem_ecs::{Entity, World, WorldError};
 use extrem_math::{Mat4, Transform, Vec3};
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 
 /// Human-readable label attached to an entity.
@@ -95,11 +96,166 @@ impl Default for Camera {
 }
 
 impl Camera {
+    pub fn view_matrix(transform: Transform) -> Mat4 {
+        let inv_rot = transform.rotation.inverse().to_mat4();
+        let inv_trans = Mat4::translation(transform.translation * -1.0);
+        inv_rot.multiply(inv_trans)
+    }
+
     pub fn view_projection(self, transform: Transform, aspect: f32) -> Mat4 {
         self.projection
             .matrix(aspect)
-            .multiply(Mat4::translation(transform.translation * -1.0))
+            .multiply(Self::view_matrix(transform))
     }
+}
+
+/// Hierarchy operation errors.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HierarchyError {
+    World(WorldError),
+    SelfParent(Entity),
+    CycleDetected { child: Entity, parent: Entity },
+    InconsistentState(String),
+}
+
+impl fmt::Display for HierarchyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::World(err) => err.fmt(formatter),
+            Self::SelfParent(entity) => write!(formatter, "{entity} cannot be its own parent"),
+            Self::CycleDetected { child, parent } => {
+                write!(
+                    formatter,
+                    "reparenting {child} under {parent} creates a cycle"
+                )
+            }
+            Self::InconsistentState(msg) => {
+                write!(formatter, "hierarchy state inconsistent: {msg}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HierarchyError {}
+
+impl From<WorldError> for HierarchyError {
+    fn from(err: WorldError) -> Self {
+        Self::World(err)
+    }
+}
+
+/// Sets parent of `child` to `parent`, enforcing cycle checks and updating both `Parent` and `Children`.
+pub fn set_parent(world: &mut World, child: Entity, parent: Entity) -> Result<(), HierarchyError> {
+    if !world.contains(child) {
+        return Err(WorldError::EntityNotFound(child).into());
+    }
+    if !world.contains(parent) {
+        return Err(WorldError::EntityNotFound(parent).into());
+    }
+    if child == parent {
+        return Err(HierarchyError::SelfParent(child));
+    }
+
+    let mut current = Some(parent);
+    while let Some(curr) = current {
+        if curr == child {
+            return Err(HierarchyError::CycleDetected { child, parent });
+        }
+        current = world.get::<Parent>(curr).map(|p| p.0);
+    }
+
+    detach(world, child)?;
+
+    world.insert(child, Parent(parent))?;
+    if let Some(children) = world.get_mut::<Children>(parent) {
+        if !children.0.contains(&child) {
+            children.0.push(child);
+        }
+    } else {
+        world.insert(parent, Children(vec![child]))?;
+    }
+
+    Ok(())
+}
+
+/// Detaches `child` from its current parent, updating `Children` on parent and removing `Parent` from `child`.
+pub fn detach(world: &mut World, child: Entity) -> Result<bool, HierarchyError> {
+    if !world.contains(child) {
+        return Err(WorldError::EntityNotFound(child).into());
+    }
+
+    if let Some(Parent(old_parent)) = world.remove::<Parent>(child)? {
+        if let Some(children) = world.get_mut::<Children>(old_parent) {
+            children.0.retain(|c| *c != child);
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Despawns `entity` and all of its descendants recursively without stack overflow.
+pub fn despawn_recursive(world: &mut World, entity: Entity) -> Result<(), HierarchyError> {
+    if !world.contains(entity) {
+        return Err(WorldError::EntityNotFound(entity).into());
+    }
+
+    detach(world, entity)?;
+
+    let mut to_despawn = Vec::new();
+    let mut stack = vec![entity];
+    while let Some(curr) = stack.pop() {
+        if world.contains(curr) {
+            to_despawn.push(curr);
+            if let Some(children) = world.get::<Children>(curr) {
+                for child in &children.0 {
+                    stack.push(*child);
+                }
+            }
+        }
+    }
+
+    for ent in to_despawn.into_iter().rev() {
+        let _ = world.despawn(ent);
+    }
+
+    Ok(())
+}
+
+/// Validates hierarchy invariants in the world.
+pub fn validate_hierarchy(world: &World) -> Result<(), HierarchyError> {
+    for (entity, parent) in world.iter::<Parent>() {
+        let parent_entity = parent.0;
+        if !world.contains(parent_entity) {
+            return Err(WorldError::EntityNotFound(parent_entity).into());
+        }
+        if entity == parent_entity {
+            return Err(HierarchyError::SelfParent(entity));
+        }
+
+        let parent_has_child = world
+            .get::<Children>(parent_entity)
+            .is_some_and(|children| children.0.contains(&entity));
+        if !parent_has_child {
+            return Err(HierarchyError::InconsistentState(format!(
+                "{entity} has Parent({parent_entity}), but parent Children list does not contain child"
+            )));
+        }
+
+        let mut visited = HashSet::new();
+        visited.insert(entity);
+        let mut curr = Some(parent_entity);
+        while let Some(c) = curr {
+            if !visited.insert(c) {
+                return Err(HierarchyError::CycleDetected {
+                    child: entity,
+                    parent: parent_entity,
+                });
+            }
+            curr = world.get::<Parent>(c).map(|p| p.0);
+        }
+    }
+    Ok(())
 }
 
 /// Serializable scene representation independent from runtime entity IDs.
@@ -184,12 +340,10 @@ impl Scene {
         world.insert(entity, transform)?;
         world.insert(entity, GlobalTransform(transform))?;
         world.insert(entity, Visibility(true))?;
-        world.insert(entity, Parent(parent))?;
-        if let Some(children) = world.get_mut::<Children>(parent) {
-            children.0.push(entity);
-        } else {
-            world.insert(parent, Children(vec![entity]))?;
-        }
+        set_parent(world, entity, parent).map_err(|err| match err {
+            HierarchyError::World(w) => w,
+            _ => WorldError::EntityNotFound(entity),
+        })?;
         Ok(entity)
     }
 
@@ -268,7 +422,7 @@ fn instantiate_node(
     Ok(entity)
 }
 
-/// Recomputes world transforms from roots down through the scene graph.
+/// Recomputes world transforms from roots down through the scene graph, guarding against cycles.
 pub fn propagate_transforms(world: &mut World) {
     let roots: Vec<_> = world
         .iter::<Transform>()
@@ -281,7 +435,13 @@ pub fn propagate_transforms(world: &mut World) {
         .collect();
 
     let mut pending = roots;
+    let mut visited = HashSet::new();
+
     while let Some((entity, parent_global)) = pending.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+
         if let Some(global) = world.get_mut::<GlobalTransform>(entity) {
             global.0 = parent_global;
         } else if world.contains(entity) {
@@ -302,7 +462,10 @@ pub fn propagate_transforms(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Children, GlobalTransform, Scene, propagate_transforms};
+    use super::{
+        Children, GlobalTransform, HierarchyError, Parent, Scene, despawn_recursive, detach,
+        propagate_transforms, set_parent, validate_hierarchy,
+    };
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
 
@@ -340,6 +503,75 @@ mod tests {
                 .translation,
             Vec3::new(12.0, 0.0, 0.0)
         );
+    }
+
+    #[test]
+    fn camera_view_matrix_includes_inverse_rotation() {
+        use extrem_math::Quat;
+        let q_y90 = Quat::from_axis_angle(Vec3::Y, std::f32::consts::FRAC_PI_2);
+        let cam_transform = Transform {
+            translation: Vec3::new(10.0, 0.0, 0.0),
+            rotation: q_y90,
+            scale: Vec3::ONE,
+        };
+        let view = super::Camera::view_matrix(cam_transform);
+
+        let world_pt = Vec3::new(10.0, 0.0, -5.0);
+        let camera_pt = view.transform_point3(world_pt);
+
+        assert!((camera_pt.x - 5.0).abs() < 1e-4);
+        assert!((camera_pt.y - 0.0).abs() < 1e-4);
+        assert!((camera_pt.z - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hierarchy_cycle_prevention_and_invariants() {
+        let mut world = World::new();
+        let e1 = world.spawn(Transform::IDENTITY);
+        let e2 = world.spawn(Transform::IDENTITY);
+
+        set_parent(&mut world, e2, e1).expect("e2 child of e1");
+        assert_eq!(world.get::<Parent>(e2), Some(&Parent(e1)));
+        assert_eq!(world.get::<Children>(e1), Some(&Children(vec![e2])));
+
+        // Reject self parent
+        assert_eq!(
+            set_parent(&mut world, e1, e1),
+            Err(HierarchyError::SelfParent(e1))
+        );
+
+        // Reject cycle e1 -> e2 -> e1
+        assert_eq!(
+            set_parent(&mut world, e1, e2),
+            Err(HierarchyError::CycleDetected {
+                child: e1,
+                parent: e2
+            })
+        );
+
+        validate_hierarchy(&world).expect("hierarchy valid");
+
+        // Detach
+        detach(&mut world, e2).expect("detach");
+        assert_eq!(world.get::<Parent>(e2), None);
+        assert_eq!(world.get::<Children>(e1), Some(&Children(vec![])));
+    }
+
+    #[test]
+    fn despawn_recursive_cleans_up_descendants() {
+        let mut world = World::new();
+        let e1 = world.spawn(Transform::IDENTITY);
+        let e2 = world.spawn(Transform::IDENTITY);
+        let e3 = world.spawn(Transform::IDENTITY);
+
+        set_parent(&mut world, e2, e1).expect("set parent e2");
+        set_parent(&mut world, e3, e2).expect("set parent e3");
+
+        despawn_recursive(&mut world, e1).expect("despawn recursive");
+
+        assert!(!world.contains(e1));
+        assert!(!world.contains(e2));
+        assert!(!world.contains(e3));
     }
 
     #[test]

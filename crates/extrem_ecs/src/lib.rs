@@ -1,27 +1,49 @@
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 
-/// Stable identifier for an entity in a [`World`].
+/// Stable generational identifier for an entity in a [`World`].
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Entity(u32);
+pub struct Entity {
+    index: u32,
+    generation: u32,
+}
 
 impl Entity {
-    /// Creates an entity from a raw index.
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
+    /// Creates an entity from raw index and generation.
+    pub const fn from_raw_parts(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
+    /// Creates an entity with generation 1 from a raw index (primarily for test mock entity creation).
+    pub const fn from_raw(index: u32) -> Self {
+        Self {
+            index,
+            generation: 1,
+        }
     }
 
     /// Returns the raw index of the entity.
     pub const fn index(self) -> u32 {
-        self.0
+        self.index
+    }
+
+    /// Returns the generation of the entity.
+    pub const fn generation(self) -> u32 {
+        self.generation
     }
 }
 
 impl fmt::Display for Entity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Entity({})", self.0)
+        write!(formatter, "Entity({}:{})", self.index, self.generation)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EntitySlot {
+    generation: u32,
+    alive: bool,
 }
 
 #[derive(Debug)]
@@ -74,8 +96,8 @@ impl std::error::Error for WorldError {}
 /// The ECS container holding entities, components and global resources.
 #[derive(Default)]
 pub struct World {
-    alive: HashSet<Entity>,
-    next_entity: u32,
+    slots: Vec<EntitySlot>,
+    free_list: Vec<u32>,
     components: HashMap<TypeId, Box<dyn Storage>>,
     resources: HashMap<TypeId, Box<dyn Any>>,
 }
@@ -88,10 +110,25 @@ impl World {
 
     /// Spawns an entity without components.
     pub fn spawn_empty(&mut self) -> Entity {
-        let entity = Entity(self.next_entity);
-        self.next_entity = self.next_entity.saturating_add(1);
-        self.alive.insert(entity);
-        entity
+        if let Some(index) = self.free_list.pop() {
+            let slot = &mut self.slots[index as usize];
+            slot.alive = true;
+            Entity {
+                index,
+                generation: slot.generation,
+            }
+        } else {
+            let index = self.slots.len() as u32;
+            let slot = EntitySlot {
+                generation: 1,
+                alive: true,
+            };
+            self.slots.push(slot);
+            Entity {
+                index,
+                generation: 1,
+            }
+        }
     }
 
     /// Spawns an entity and inserts its first component.
@@ -102,16 +139,26 @@ impl World {
         entity
     }
 
-    /// Returns whether the entity is alive in this world.
+    /// Returns whether the entity is alive in this world with matching generation.
     pub fn contains(&self, entity: Entity) -> bool {
-        self.alive.contains(&entity)
+        let index = entity.index as usize;
+        if index >= self.slots.len() {
+            return false;
+        }
+        let slot = self.slots[index];
+        slot.alive && slot.generation == entity.generation
     }
 
     /// Removes an entity and all of its components.
     pub fn despawn(&mut self, entity: Entity) -> Result<(), WorldError> {
-        if !self.alive.remove(&entity) {
+        if !self.contains(entity) {
             return Err(WorldError::EntityNotFound(entity));
         }
+
+        let slot = &mut self.slots[entity.index as usize];
+        slot.alive = false;
+        slot.generation = slot.generation.wrapping_add(1);
+        self.free_list.push(entity.index);
 
         for storage in self.components.values_mut() {
             storage.remove_entity(entity);
@@ -143,6 +190,9 @@ impl World {
 
     /// Gets an immutable component reference.
     pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> {
+        if !self.contains(entity) {
+            return None;
+        }
         self.components
             .get(&TypeId::of::<T>())
             .and_then(|storage| storage.as_any().downcast_ref::<TypedStorage<T>>())
@@ -151,6 +201,9 @@ impl World {
 
     /// Gets a mutable component reference.
     pub fn get_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
+        if !self.contains(entity) {
+            return None;
+        }
         self.components
             .get_mut(&TypeId::of::<T>())
             .and_then(|storage| storage.as_any_mut().downcast_mut::<TypedStorage<T>>())
@@ -200,7 +253,7 @@ impl World {
 
     /// Returns the number of alive entities.
     pub fn entity_count(&self) -> usize {
-        self.alive.len()
+        self.slots.iter().filter(|s| s.alive).count()
     }
 
     /// Returns the number of stored values for a component type.
@@ -255,6 +308,25 @@ mod tests {
             world.despawn(entity),
             Err(WorldError::EntityNotFound(entity))
         );
+    }
+
+    #[test]
+    fn generational_index_prevents_stale_handle_reuse() {
+        let mut world = World::new();
+        let entity_v1 = world.spawn(Health(100));
+        world.despawn(entity_v1).expect("despawn");
+
+        let entity_v2 = world.spawn(Health(200));
+
+        // Index is reused but generation changed
+        assert_eq!(entity_v1.index(), entity_v2.index());
+        assert_ne!(entity_v1.generation(), entity_v2.generation());
+
+        // Stale handle should fail lookup and contain check
+        assert!(!world.contains(entity_v1));
+        assert!(world.contains(entity_v2));
+        assert_eq!(world.get::<Health>(entity_v1), None);
+        assert_eq!(world.get::<Health>(entity_v2), Some(&Health(200)));
     }
 
     #[test]

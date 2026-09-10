@@ -1,10 +1,11 @@
 use std::fmt;
 
-/// Errors returned while initializing the graphics device.
+/// Errors returned while initializing or operating the graphics device.
 #[derive(Debug)]
 pub enum GpuError {
     Adapter(String),
     Device(String),
+    Surface(String),
 }
 
 impl fmt::Display for GpuError {
@@ -12,6 +13,7 @@ impl fmt::Display for GpuError {
         match self {
             Self::Adapter(message) => write!(formatter, "GPU adapter unavailable: {message}"),
             Self::Device(message) => write!(formatter, "GPU device unavailable: {message}"),
+            Self::Surface(message) => write!(formatter, "GPU surface creation failed: {message}"),
         }
     }
 }
@@ -68,5 +70,75 @@ impl GpuContext {
 
     pub fn adapter_name(&self) -> String {
         self.adapter.get_info().name
+    }
+}
+
+/// Surface configuration and rendering target wrapper with safe lifecycle handling.
+pub struct SurfaceTarget {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+}
+
+impl SurfaceTarget {
+    pub fn new(
+        instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, GpuError> {
+        let surface = instance
+            .create_surface(target)
+            .map_err(|err| GpuError::Surface(err.to_string()))?;
+
+        let caps = surface.get_capabilities(adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Srgb,
+        };
+
+        surface.configure(device, &config);
+
+        Ok(Self { surface, config })
+    }
+
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(device, &self.config);
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    pub fn width(&self) -> u32 {
+        self.config.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.config.height
+    }
+
+    pub fn acquire_frame(&self) -> wgpu::CurrentSurfaceTexture {
+        self.surface.get_current_texture()
     }
 }

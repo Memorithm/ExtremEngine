@@ -52,15 +52,28 @@ struct RenderPass {
     dependencies: Vec<RenderPassId>,
 }
 
-/// Deterministic dependency graph for render passes.
+/// Execution plan produced by compiling a [`RenderGraph`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompiledRenderGraph {
+    pub version: u64,
+    pub execution_order: Vec<RenderPassId>,
+}
+
+/// Deterministic dependency graph for render passes with compilation caching.
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     passes: Vec<RenderPass>,
+    version: u64,
+    cached_plan: Option<CompiledRenderGraph>,
 }
 
 impl RenderGraph {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn add_pass(&mut self, name: impl Into<String>) -> RenderPassId {
@@ -69,6 +82,8 @@ impl RenderGraph {
             name: name.into(),
             dependencies: Vec::new(),
         });
+        self.version = self.version.wrapping_add(1);
+        self.cached_plan = None;
         id
     }
 
@@ -84,6 +99,8 @@ impl RenderGraph {
             return Err(RenderGraphError::MissingPass(dependency));
         }
         self.passes[pass.0].dependencies.push(dependency);
+        self.version = self.version.wrapping_add(1);
+        self.cached_plan = None;
         Ok(())
     }
 
@@ -91,13 +108,25 @@ impl RenderGraph {
         self.passes.get(pass.0).map(|pass| pass.name.as_str())
     }
 
-    pub fn compile(&self) -> Result<Vec<RenderPassId>, RenderGraphError> {
+    pub fn compile(&mut self) -> Result<CompiledRenderGraph, RenderGraphError> {
+        if let Some(plan) = &self.cached_plan {
+            if plan.version == self.version {
+                return Ok(plan.clone());
+            }
+        }
+
         let mut states = vec![0_u8; self.passes.len()];
         let mut order = Vec::with_capacity(self.passes.len());
         for index in 0..self.passes.len() {
             visit_pass(index, self, &mut states, &mut order)?;
         }
-        Ok(order)
+
+        let plan = CompiledRenderGraph {
+            version: self.version,
+            execution_order: order,
+        };
+        self.cached_plan = Some(plan.clone());
+        Ok(plan)
     }
 }
 
@@ -293,8 +322,13 @@ mod tests {
         graph.add_dependency(opaque, clear).expect("dependency");
         graph.add_dependency(ui, opaque).expect("dependency");
 
-        let order = graph.compile().expect("acyclic graph");
-        assert_eq!(order, vec![clear, opaque, ui]);
+        let compiled = graph.compile().expect("acyclic graph");
+        assert_eq!(compiled.execution_order, vec![clear, opaque, ui]);
+
+        // Caching verification: compiling unchanged graph returns same cached plan version
+        let cached = graph.compile().expect("cached graph");
+        assert_eq!(compiled.version, cached.version);
+        assert_eq!(compiled.execution_order, cached.execution_order);
     }
 
     #[test]

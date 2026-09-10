@@ -3,11 +3,13 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use extrem_input::{Input, KeyCode, MouseButton};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::error::{EventLoopError, OsError};
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode as WinitKeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 /// Configuration used when creating the host window.
@@ -45,6 +47,65 @@ impl Display for WindowError {
 }
 
 impl Error for WindowError {}
+
+/// Processes a winit WindowEvent and updates the provided input state.
+pub fn process_window_event(input: &mut Input, event: &WindowEvent) {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => {
+            if let PhysicalKey::Code(key_code) = event.physical_key {
+                let mapped = map_winit_key(key_code);
+                if event.state == ElementState::Pressed {
+                    input.keys.press(mapped);
+                } else {
+                    input.keys.release(mapped);
+                }
+            }
+        }
+        WindowEvent::MouseInput { state, button, .. } => {
+            let mapped = map_winit_mouse_button(*button);
+            if *state == ElementState::Pressed {
+                input.mouse_buttons.press(mapped);
+            } else {
+                input.mouse_buttons.release(mapped);
+            }
+        }
+        WindowEvent::CursorMoved { position, .. } => {
+            input.mouse.move_to(position.x as f32, position.y as f32);
+        }
+        WindowEvent::MouseWheel { delta, .. } => {
+            let scroll_amount = match delta {
+                MouseScrollDelta::LineDelta(_, y) => *y,
+                MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+            };
+            input.mouse.scroll(scroll_amount);
+        }
+        _ => {}
+    }
+}
+
+fn map_winit_key(key: WinitKeyCode) -> KeyCode {
+    match key {
+        WinitKeyCode::KeyA => KeyCode::A,
+        WinitKeyCode::KeyD => KeyCode::D,
+        WinitKeyCode::KeyE => KeyCode::E,
+        WinitKeyCode::Escape => KeyCode::Escape,
+        WinitKeyCode::KeyQ => KeyCode::Q,
+        WinitKeyCode::KeyS => KeyCode::S,
+        WinitKeyCode::Space => KeyCode::Space,
+        WinitKeyCode::KeyW => KeyCode::W,
+        _ => KeyCode::Unknown(key as u32),
+    }
+}
+
+fn map_winit_mouse_button(button: winit::event::MouseButton) -> MouseButton {
+    match button {
+        winit::event::MouseButton::Left => MouseButton::Left,
+        winit::event::MouseButton::Middle => MouseButton::Middle,
+        winit::event::MouseButton::Right => MouseButton::Right,
+        winit::event::MouseButton::Other(value) => MouseButton::Other(value as u8),
+        _ => MouseButton::Other(255),
+    }
+}
 
 /// Runs an engine frame callback from a native cross-platform event loop.
 pub struct WindowHost;
@@ -118,7 +179,9 @@ impl ApplicationHandler for WindowApplication {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowConfig;
+    use super::{WindowConfig, process_window_event};
+    use extrem_input::Input;
+    use winit::event::{MouseScrollDelta, WindowEvent};
 
     #[test]
     fn default_window_is_hd_ready() {
@@ -126,5 +189,27 @@ mod tests {
         assert_eq!(config.width, 1280);
         assert_eq!(config.height, 720);
         assert_eq!(config.title, "ExtremEngine");
+    }
+
+    #[test]
+    fn process_window_event_updates_mouse_state() {
+        let mut input = Input::default();
+        let move_event = WindowEvent::CursorMoved {
+            device_id: winit::event::DeviceId::dummy(),
+            position: winit::dpi::PhysicalPosition::new(100.0, 200.0),
+        };
+
+        process_window_event(&mut input, &move_event);
+        assert_eq!(input.mouse.position, (100.0, 200.0));
+        assert_eq!(input.mouse.delta, (100.0, 200.0));
+
+        let wheel_event = WindowEvent::MouseWheel {
+            device_id: winit::event::DeviceId::dummy(),
+            delta: MouseScrollDelta::LineDelta(0.0, 1.5),
+            phase: winit::event::TouchPhase::Moved,
+        };
+
+        process_window_event(&mut input, &wheel_event);
+        assert_eq!(input.mouse.wheel, 1.5);
     }
 }

@@ -1,55 +1,36 @@
 # ExtremEngine
 
-ExtremEngine est un moteur de jeu Rust modulaire en construction. L’objectif est de réunir :
+ExtremEngine est un moteur de jeu Rust modulaire, sûr et déterministe. Il fournit une architecture propre pour le rendu GPU (`wgpu`), l'animation squelettique, la physique, l'input et les systèmes interactifs.
 
-- la simplicité et la modularité d’un moteur data-oriented ;
-- des outils de production plus riches à terme, inspirés des moteurs généralistes ;
-- une base native Rust, sûre, testable et extensible ;
-- un point d’intégration pour les calculs scientifiques et les simulations.
+## Modules du Workspace
 
-## Premier incrément
+- `extrem_ecs` : Entités générationnelles, composants, ressources et monde.
+- `extrem_math` : Vecteurs `Vec3`, quaternions `Quat`, matrices `Mat4` et compositior affine `Transform`.
+- `extrem_scene` : Hiérarchie parent/enfant avec validation anti-cycle, caméras et documents RON.
+- `extrem_editor` : Moteur de transactions `CommandRecord`, historique undo/redo et inspection.
+- `extrem_assets` : Normalisation canonique de chemins, détection de collisions et handles typés.
+- `extrem_app` : Boucle temporelle déterministe, bornes d'accumulation anti-spirale et schedules.
+- `extrem_input` : Gestion d'input clavier, boutons de souris, position/delta et molette.
+- `extrem_window` : Intégration de la boucle d'événements `winit` et liaison avec les événements d'entrée.
+- `extrem_gpu` : Initialisation `wgpu` (headless + `SurfaceTarget` de rendu de fenêtre).
+- `extrem_render` : Render graph avec compilation mise en cache, tri topologique et backends de rendu.
+- `extrem_animation` : Squelettes, clips, échantillonnage slerp, blending de poses, palette de matrices pour LBS GPU et interfaces adaptatives.
+- `extrem_physics` : Rigid bodies, gravité et collisionneurs box en fixed timestep.
+- `extrem_science` : Intégration numérique d'EDO (Euler, RK4) et horloge de simulation.
+- `extrem_audio` : Backend audio abstrait pour les tests et la production.
+- `extrem_engine` : Façade d'intégration du moteur.
 
-Ce dépôt contient actuellement un noyau exécutable :
+## Commandes de Validation
 
-- `extrem_ecs` : entités, composants, ressources et monde ;
-- `extrem_math` : types mathématiques de base et transforms ;
-- `extrem_app` : temps, plugins, startup/fixed-update/update/post-update/render schedules ;
-- `extrem_assets` : handles typés, déduplication par chemin et registre d’assets ;
-- `extrem_audio` : commandes audio et contrat de backend ;
-- `extrem_editor` : commandes d’inspection, sélection et undo/redo ;
-- `extrem_input` : clavier, souris et transitions de boutons sans dépendance plateforme ;
-- `extrem_physics` : rigid bodies et résolution sol/gravity en fixed timestep ;
-- `extrem_scene` : composants de scène, hiérarchie parent/enfant et propagation des transforms ;
-- `extrem_render` : contrat de rendu remplaçable et backend nul pour les tests ;
-- `extrem_gpu` : initialisation wgpu headless isolée et exemple de détection GPU ;
-- `extrem_window` : hôte de fenêtre natif et boucle d’événements multiplateforme ;
-- `extrem_science` : primitives de simulation numérique sans dépendance obligatoire ;
-- `extrem_engine` : façade haut niveau et exemple de boucle de jeu.
-
-L’exemple sandbox valide la boucle moteur, les mises à jour ECS, le fixed timestep et l’extraction de commandes de rendu. `extrem_window` fournit l’hôte natif nécessaire au branchement d’un renderer interactif.
-
-## Démarrer
-
-Depuis ce dossier :
-
-```text
-cargo test --workspace --all-targets
+```bash
+cargo test --workspace --all-targets --locked
 cargo run -p extrem_engine --example sandbox
 cargo run -p extrem_gpu --example probe
 ```
 
-## Direction technique
+## Documentation
 
-Le code est écrit à partir de contrats propres à ExtremEngine. L’archive Bevy fournie sert de référence d’architecture et de conception ; aucun fichier Bevy n’est copié dans ce workspace. Le dépôt public `Memorithm/ExtremEngine` héberge cette première version du noyau.
-
-Le module scientifique n’active pas encore une dépendance `scirust` par défaut. Il expose une interface minimale afin de pouvoir brancher une bibliothèque de calcul spécialisée lorsqu’un besoin concret — intégration ODE, algèbre linéaire, champs, optimisation ou ML — sera défini.
-
-## État de livraison
-
-1. Terminé : fenêtre native, boucle d’événements et détection GPU `wgpu` headless.
-2. Terminé : assets typés, scènes RON et propagation de hiérarchie.
-3. Terminé : caméras, projections, render graph et renderer CPU de validation.
-4. Terminé : physique déterministe, audio abstrait et input clavier/souris.
-5. Terminé : inspection ECS, sélection et undo/redo côté éditeur.
-6. Terminé : Euler, RK4 et horloge de simulation pour les intégrations scientifiques.
-7. Suite : hot reload/importeurs, matériaux/lumières et renderer `wgpu` présentable.
+- `docs/ARCHITECTURE.md`
+- `docs/TRANSFORMS.md`
+- `docs/ANIMATION.md`
+- `docs/SECURITY.md`
