@@ -240,7 +240,11 @@ impl Quat {
             cos_theta = -cos_theta;
         }
 
-        let clamped_t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+        let clamped_t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if cos_theta > 0.9995 {
             return Self::new(
                 source.x + (target.x - source.x) * clamped_t,
@@ -274,7 +278,11 @@ impl Quat {
         if source.dot(target) < 0.0 {
             target = Self::new(-target.x, -target.y, -target.z, -target.w);
         }
-        let alpha = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+        let alpha = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         Self::new(
             source.x + (target.x - source.x) * alpha,
             source.y + (target.y - source.y) * alpha,
@@ -301,10 +309,22 @@ impl Quat {
 
         Mat4 {
             data: [
-                1.0 - (yy + zz), xy + wz, xz - wy, 0.0,
-                xy - wz, 1.0 - (xx + zz), yz + wx, 0.0,
-                xz + wy, yz - wx, 1.0 - (xx + yy), 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0 - (yy + zz),
+                xy + wz,
+                xz - wy,
+                0.0,
+                xy - wz,
+                1.0 - (xx + zz),
+                yz + wx,
+                0.0,
+                xz + wy,
+                yz - wx,
+                1.0 - (xx + yy),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],
         }
     }
@@ -349,15 +369,24 @@ impl Transform {
     };
 
     pub const fn from_translation(translation: Vec3) -> Self {
-        Self { translation, ..Self::IDENTITY }
+        Self {
+            translation,
+            ..Self::IDENTITY
+        }
     }
 
     pub const fn from_scale(scale: Vec3) -> Self {
-        Self { scale, ..Self::IDENTITY }
+        Self {
+            scale,
+            ..Self::IDENTITY
+        }
     }
 
     pub const fn from_rotation(rotation: Quat) -> Self {
-        Self { rotation, ..Self::IDENTITY }
+        Self {
+            rotation,
+            ..Self::IDENTITY
+        }
     }
 
     pub const fn with_rotation(mut self, rotation: Quat) -> Self {
@@ -404,10 +433,7 @@ pub struct Mat4 {
 impl Mat4 {
     pub const IDENTITY: Self = Self {
         data: [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ],
     };
 
@@ -433,10 +459,22 @@ impl Mat4 {
         let inverse_depth = 1.0 / (near - far);
         Self {
             data: [
-                f / aspect, 0.0, 0.0, 0.0,
-                0.0, f, 0.0, 0.0,
-                0.0, 0.0, far * inverse_depth, -1.0,
-                0.0, 0.0, (far * near) * inverse_depth, 0.0,
+                f / aspect,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                far * inverse_depth,
+                -1.0,
+                0.0,
+                0.0,
+                (far * near) * inverse_depth,
+                0.0,
             ],
         }
     }
@@ -445,10 +483,22 @@ impl Mat4 {
     pub fn orthographic(width: f32, height: f32, near: f32, far: f32) -> Self {
         Self {
             data: [
-                2.0 / width, 0.0, 0.0, 0.0,
-                0.0, 2.0 / height, 0.0, 0.0,
-                0.0, 0.0, 1.0 / (near - far), 0.0,
-                0.0, 0.0, near / (near - far), 1.0,
+                2.0 / width,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0 / height,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0 / (near - far),
+                0.0,
+                0.0,
+                0.0,
+                near / (near - far),
+                1.0,
             ],
         }
     }
@@ -512,7 +562,10 @@ mod tests {
         let qy = Quat::from_axis_angle(Vec3::Y, -0.37);
         let qz = Quat::from_axis_angle(Vec3::Z, 1.13);
         let point = Vec3::new(0.3, -2.0, 4.5);
-        approx_vec((qy * qx).rotate_vec3(point), qy.rotate_vec3(qx.rotate_vec3(point)));
+        approx_vec(
+            (qy * qx).rotate_vec3(point),
+            qy.rotate_vec3(qx.rotate_vec3(point)),
+        );
         approx_vec(
             (qz * qy * qx).rotate_vec3(point),
             qz.rotate_vec3(qy.rotate_vec3(qx.rotate_vec3(point))),
@@ -541,7 +594,10 @@ mod tests {
         };
         let point = Vec3::new(0.4, 0.2, -0.8);
         let combined = Transform::combine(parent, local);
-        approx_vec(combined.transform_point(point), parent.transform_point(local.transform_point(point)));
+        approx_vec(
+            combined.transform_point(point),
+            parent.transform_point(local.transform_point(point)),
+        );
     }
 
     #[test]
@@ -561,7 +617,10 @@ mod tests {
             scale: Vec3::new(2.0, 2.0, 2.0),
         };
         let point = Vec3::new(0.5, -1.0, 2.0);
-        approx_vec(transform.to_mat4().transform_point3(point), transform.transform_point(point));
+        approx_vec(
+            transform.to_mat4().transform_point3(point),
+            transform.transform_point(point),
+        );
     }
 
     #[test]
@@ -569,8 +628,14 @@ mod tests {
         let near = 0.1;
         let far = 100.0;
         let projection = Mat4::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far);
-        approx(projection.transform_point3(Vec3::new(0.0, 0.0, -near)).z, 0.0);
-        approx(projection.transform_point3(Vec3::new(0.0, 0.0, -far)).z, 1.0);
+        approx(
+            projection.transform_point3(Vec3::new(0.0, 0.0, -near)).z,
+            0.0,
+        );
+        approx(
+            projection.transform_point3(Vec3::new(0.0, 0.0, -far)).z,
+            1.0,
+        );
     }
 
     #[test]

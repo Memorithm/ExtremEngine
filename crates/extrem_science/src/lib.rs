@@ -22,7 +22,10 @@ impl fmt::Display for SimulationError {
             Self::NonFiniteTime => write!(formatter, "simulation time must be finite"),
             Self::NonFiniteState => write!(formatter, "simulation state contains NaN or infinity"),
             Self::NonFiniteDerivative => {
-                write!(formatter, "dynamical system derivative produced NaN or infinity")
+                write!(
+                    formatter,
+                    "dynamical system derivative produced NaN or infinity"
+                )
             }
             Self::TimeOverflow => write!(formatter, "simulation time overflowed the finite range"),
             Self::StepCounterOverflow => write!(formatter, "simulation step counter overflowed"),
@@ -292,7 +295,10 @@ mod tests {
     #[test]
     fn clock_rejects_non_finite_step_without_mutating_state() {
         let mut clock = SimulationClock::default();
-        assert_eq!(clock.advance(f64::INFINITY), Err(SimulationError::InvalidStep));
+        assert_eq!(
+            clock.advance(f64::INFINITY),
+            Err(SimulationError::InvalidStep)
+        );
         assert_eq!(clock, SimulationClock::default());
     }
 }

@@ -211,9 +211,13 @@ impl fmt::Display for PhysicsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMass => write!(formatter, "a dynamic body must have finite positive mass"),
-            Self::InvalidCollider => write!(formatter, "box half-extents must be finite and positive"),
+            Self::InvalidCollider => {
+                write!(formatter, "box half-extents must be finite and positive")
+            }
             Self::InvalidGravity => write!(formatter, "gravity must contain only finite values"),
-            Self::InvalidTimestep => write!(formatter, "physics timestep must be finite and positive"),
+            Self::InvalidTimestep => {
+                write!(formatter, "physics timestep must be finite and positive")
+            }
         }
     }
 }
@@ -222,9 +226,7 @@ impl std::error::Error for PhysicsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
-    };
+    use super::{BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody};
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};

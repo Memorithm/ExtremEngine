@@ -16,7 +16,10 @@ impl fmt::Display for GpuError {
             Self::Device(message) => write!(formatter, "GPU device unavailable: {message}"),
             Self::Surface(message) => write!(formatter, "GPU surface creation failed: {message}"),
             Self::SurfaceCapabilities(message) => {
-                write!(formatter, "GPU surface capabilities are unusable: {message}")
+                write!(
+                    formatter,
+                    "GPU surface capabilities are unusable: {message}"
+                )
             }
         }
     }
@@ -92,7 +95,8 @@ impl GpuContext {
         }))
         .map_err(|error| GpuError::Adapter(error.to_string()))?;
         let (device, queue) = request_device(&adapter)?;
-        let surface_target = SurfaceTarget::from_surface(surface, &adapter, &device, width, height)?;
+        let surface_target =
+            SurfaceTarget::from_surface(surface, &adapter, &device, width, height)?;
         Ok((
             Self {
                 instance,
@@ -195,7 +199,10 @@ impl SurfaceTarget {
             .first()
             .copied()
             .ok_or_else(|| GpuError::SurfaceCapabilities("no alpha mode".to_owned()))?;
-        let present_mode = if capabilities.present_modes.contains(&wgpu::PresentMode::Fifo) {
+        let present_mode = if capabilities
+            .present_modes
+            .contains(&wgpu::PresentMode::Fifo)
+        {
             wgpu::PresentMode::Fifo
         } else {
             capabilities
@@ -328,10 +335,12 @@ impl WgpuPresenter {
     }
 
     pub fn new(context: GpuContext, surface: SurfaceTarget) -> Self {
-        let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ExtremEngine validation triangle shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(VALIDATION_TRIANGLE_SHADER)),
-        });
+        let shader = context
+            .device()
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("ExtremEngine validation triangle shader"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(VALIDATION_TRIANGLE_SHADER)),
+            });
         let color_targets = [Some(wgpu::ColorTargetState {
             format: surface.format(),
             blend: Some(wgpu::BlendState::REPLACE),
@@ -396,12 +405,12 @@ impl WgpuPresenter {
                 let view = texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder = self
-                    .context
-                    .device()
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("ExtremEngine validation frame encoder"),
-                    });
+                let mut encoder =
+                    self.context
+                        .device()
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("ExtremEngine validation frame encoder"),
+                        });
                 {
                     let color_attachment = Some(wgpu::RenderPassColorAttachment {
                         view: &view,

@@ -13,9 +13,7 @@ pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, H
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
 pub use extrem_ecs::{Entity, WorldError};
 pub use extrem_editor::{EditorCommand, EditorError, EditorState, InspectorSnapshot};
-pub use extrem_gpu::{
-    GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, WgpuPresenter,
-};
+pub use extrem_gpu::{GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, WgpuPresenter};
 pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
@@ -393,8 +391,14 @@ mod tests {
         let mut engine = Engine::new();
         let first = engine.world_mut().spawn(Transform::IDENTITY);
         let second = engine.world_mut().spawn(Transform::IDENTITY);
-        engine.world_mut().insert(second, Camera::default()).expect("camera");
-        engine.world_mut().insert(first, Camera::default()).expect("camera");
+        engine
+            .world_mut()
+            .insert(second, Camera::default())
+            .expect("camera");
+        engine
+            .world_mut()
+            .insert(first, Camera::default())
+            .expect("camera");
         engine.tick(1.0 / 60.0);
         assert!(first < second);
         assert_eq!(engine.last_frame_stats().submitted_commands, 3);

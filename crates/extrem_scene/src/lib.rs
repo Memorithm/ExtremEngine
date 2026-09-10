@@ -59,9 +59,17 @@ impl Default for Projection {
 
 impl Projection {
     pub fn matrix(self, aspect: f32) -> Mat4 {
-        let safe_aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let safe_aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
         match self {
-            Self::Perspective { fov_y_radians, near, far } => {
+            Self::Perspective {
+                fov_y_radians,
+                near,
+                far,
+            } => {
                 let fov = if fov_y_radians.is_finite()
                     && fov_y_radians > 0.0
                     && fov_y_radians < std::f32::consts::PI
@@ -70,15 +78,40 @@ impl Projection {
                 } else {
                     std::f32::consts::FRAC_PI_3
                 };
-                let safe_near = if near.is_finite() && near > 0.0 { near } else { 0.1 };
-                let safe_far = if far.is_finite() && far > safe_near { far } else { safe_near + 10_000.0 };
+                let safe_near = if near.is_finite() && near > 0.0 {
+                    near
+                } else {
+                    0.1
+                };
+                let safe_far = if far.is_finite() && far > safe_near {
+                    far
+                } else {
+                    safe_near + 10_000.0
+                };
                 Mat4::perspective(fov, safe_aspect, safe_near, safe_far)
             }
-            Self::Orthographic { width, height, near, far } => {
-                let safe_width = if width.is_finite() && width > 0.0 { width } else { 1.0 };
-                let safe_height = if height.is_finite() && height > 0.0 { height } else { 1.0 };
+            Self::Orthographic {
+                width,
+                height,
+                near,
+                far,
+            } => {
+                let safe_width = if width.is_finite() && width > 0.0 {
+                    width
+                } else {
+                    1.0
+                };
+                let safe_height = if height.is_finite() && height > 0.0 {
+                    height
+                } else {
+                    1.0
+                };
                 let safe_near = if near.is_finite() { near } else { -1.0 };
-                let safe_far = if far.is_finite() && far > safe_near { far } else { safe_near + 2.0 };
+                let safe_far = if far.is_finite() && far > safe_near {
+                    far
+                } else {
+                    safe_near + 2.0
+                };
                 Mat4::orthographic(safe_width, safe_height, safe_near, safe_far)
             }
         }
@@ -128,9 +161,14 @@ impl fmt::Display for HierarchyError {
             Self::World(err) => err.fmt(formatter),
             Self::SelfParent(entity) => write!(formatter, "{entity} cannot be its own parent"),
             Self::CycleDetected { child, parent } => {
-                write!(formatter, "reparenting {child} under {parent} creates or encounters a cycle")
+                write!(
+                    formatter,
+                    "reparenting {child} under {parent} creates or encounters a cycle"
+                )
             }
-            Self::InconsistentState(msg) => write!(formatter, "hierarchy state inconsistent: {msg}"),
+            Self::InconsistentState(msg) => {
+                write!(formatter, "hierarchy state inconsistent: {msg}")
+            }
         }
     }
 }
@@ -407,10 +445,14 @@ impl SceneDocument {
         while let Some((node, depth)) = stack.pop() {
             count = count.saturating_add(1);
             if count > MAX_SCENE_NODES {
-                return Err(SceneFormatError::Invalid("scene exceeds node limit".to_owned()));
+                return Err(SceneFormatError::Invalid(
+                    "scene exceeds node limit".to_owned(),
+                ));
             }
             if depth > MAX_SCENE_DEPTH {
-                return Err(SceneFormatError::Invalid("scene exceeds hierarchy depth limit".to_owned()));
+                return Err(SceneFormatError::Invalid(
+                    "scene exceeds hierarchy depth limit".to_owned(),
+                ));
             }
             if !node.transform.is_valid() {
                 return Err(SceneFormatError::Invalid(format!(
@@ -484,7 +526,10 @@ pub fn propagate_transforms(world: &mut World) {
     let roots: Vec<_> = world
         .iter::<Transform>()
         .filter_map(|(entity, transform)| {
-            world.get::<Parent>(entity).is_none().then_some((entity, *transform))
+            world
+                .get::<Parent>(entity)
+                .is_none()
+                .then_some((entity, *transform))
         })
         .collect();
 
@@ -555,8 +600,8 @@ mod tests {
             rotation: Quat::from_axis_angle(Vec3::Y, std::f32::consts::FRAC_PI_2),
             scale: Vec3::ONE,
         };
-        let camera_pt = super::Camera::view_matrix(cam_transform)
-            .transform_point3(Vec3::new(10.0, 0.0, -5.0));
+        let camera_pt =
+            super::Camera::view_matrix(cam_transform).transform_point3(Vec3::new(10.0, 0.0, -5.0));
         assert!((camera_pt.x - 5.0).abs() < 1e-4);
         assert!(camera_pt.y.abs() < 1e-4);
         assert!(camera_pt.z.abs() < 1e-4);
@@ -570,10 +615,16 @@ mod tests {
         set_parent(&mut world, e2, e1).expect("e2 child of e1");
         assert_eq!(world.get::<Parent>(e2), Some(&Parent(e1)));
         assert_eq!(world.get::<Children>(e1), Some(&Children(vec![e2])));
-        assert_eq!(set_parent(&mut world, e1, e1), Err(HierarchyError::SelfParent(e1)));
+        assert_eq!(
+            set_parent(&mut world, e1, e1),
+            Err(HierarchyError::SelfParent(e1))
+        );
         assert_eq!(
             set_parent(&mut world, e1, e2),
-            Err(HierarchyError::CycleDetected { child: e1, parent: e2 })
+            Err(HierarchyError::CycleDetected {
+                child: e1,
+                parent: e2
+            })
         );
         validate_hierarchy(&world).expect("hierarchy valid");
         detach(&mut world, e2).expect("detach");
@@ -601,7 +652,9 @@ mod tests {
         let mut world = World::new();
         let parent = world.spawn(Transform::IDENTITY);
         let child = world.spawn(Transform::IDENTITY);
-        world.insert(parent, Children(vec![child, child])).expect("children");
+        world
+            .insert(parent, Children(vec![child, child]))
+            .expect("children");
         world.insert(child, Parent(parent)).expect("parent");
         assert!(validate_hierarchy(&world).is_err());
     }

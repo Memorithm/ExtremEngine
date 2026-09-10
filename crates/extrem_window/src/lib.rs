@@ -114,7 +114,10 @@ fn map_winit_mouse_button(button: winit::event::MouseButton) -> MouseButton {
 pub struct WindowHost;
 
 impl WindowHost {
-    pub fn run(config: WindowConfig, mut on_frame: impl FnMut() + 'static) -> Result<(), WindowError> {
+    pub fn run(
+        config: WindowConfig,
+        mut on_frame: impl FnMut() + 'static,
+    ) -> Result<(), WindowError> {
         Self::run_with_input(config, move |_window, _input| on_frame())
     }
 
