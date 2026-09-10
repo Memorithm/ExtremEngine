@@ -2,13 +2,41 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 
-/// Normalized asset key representing canonical path identity.
+const MAX_ASSET_PATH_BYTES: usize = 4096;
+
+/// Errors produced while converting an external path into an engine asset key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssetPathError {
+    Empty,
+    TooLong,
+    Absolute,
+    WindowsPrefix,
+    ParentTraversal,
+    NulByte,
+}
+
+impl fmt::Display for AssetPathError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(formatter, "asset path is empty"),
+            Self::TooLong => write!(formatter, "asset path exceeds {MAX_ASSET_PATH_BYTES} bytes"),
+            Self::Absolute => write!(formatter, "absolute asset paths are not allowed"),
+            Self::WindowsPrefix => write!(formatter, "Windows drive/UNC prefixes are not allowed"),
+            Self::ParentTraversal => write!(formatter, "asset path attempts to escape its virtual root"),
+            Self::NulByte => write!(formatter, "asset path contains a NUL byte"),
+        }
+    }
+}
+
+impl std::error::Error for AssetPathError {}
+
+/// Normalized, validated asset key representing canonical virtual-path identity.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AssetKey(String);
 
 impl AssetKey {
-    pub fn new(path: &str) -> Self {
-        Self(normalize_path(path))
+    pub fn new(path: &str) -> Result<Self, AssetPathError> {
+        normalize_path(path).map(Self)
     }
 
     pub fn as_str(&self) -> &str {
@@ -16,15 +44,23 @@ impl AssetKey {
     }
 }
 
-/// Stable 64-bit identifier derived from normalized asset path.
+/// Stable 64-bit identifier derived from a validated normalized asset path.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AssetId(u64);
 
 impl AssetId {
-    pub fn from_path(path: &str) -> Self {
-        let normalized = normalize_path(path);
+    pub fn from_key(key: &AssetKey) -> Self {
+        Self::from_normalized(key.as_str())
+    }
+
+    pub fn from_path(path: &str) -> Result<Self, AssetPathError> {
+        let key = AssetKey::new(path)?;
+        Ok(Self::from_key(&key))
+    }
+
+    fn from_normalized(path: &str) -> Self {
         let mut hash = 0xcbf29ce484222325_u64;
-        for byte in normalized.bytes() {
+        for byte in path.bytes() {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
@@ -44,7 +80,6 @@ pub struct Handle<T> {
 }
 
 impl<T> Copy for Handle<T> {}
-
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
@@ -75,16 +110,16 @@ pub enum AssetState {
 
 #[derive(Debug)]
 struct AssetEntry<T> {
-    path: String,
+    key: AssetKey,
     value: T,
     state: AssetState,
 }
 
-/// In-memory typed asset registry with path canonicalization and collision protection.
+/// In-memory typed asset registry with fail-closed path validation and collision protection.
 #[derive(Debug)]
 pub struct Assets<T> {
     entries: HashMap<AssetId, AssetEntry<T>>,
-    paths: HashMap<String, AssetId>,
+    paths: HashMap<AssetKey, AssetId>,
 }
 
 impl<T> Default for Assets<T> {
@@ -100,6 +135,7 @@ impl<T> Default for Assets<T> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum AssetError<E = String> {
     Loader(E),
+    InvalidPath(AssetPathError),
     Collision { path: String, existing_path: String },
     NotFound(AssetId),
 }
@@ -108,12 +144,10 @@ impl<E: fmt::Display> fmt::Display for AssetError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Loader(error) => write!(formatter, "asset loader failed: {error}"),
-            Self::Collision {
-                path,
-                existing_path,
-            } => write!(
+            Self::InvalidPath(error) => write!(formatter, "invalid asset path: {error}"),
+            Self::Collision { path, existing_path } => write!(
                 formatter,
-                "asset path collision: '{path}' collides with existing '{existing_path}'"
+                "asset ID collision: '{path}' collides with existing '{existing_path}'"
             ),
             Self::NotFound(id) => write!(formatter, "asset not found for ID: {id:?}"),
         }
@@ -132,28 +166,20 @@ impl<T> Assets<T> {
         path: impl Into<String>,
         value: T,
     ) -> Result<Handle<T>, AssetError<String>> {
-        let canonical_path = normalize_path(&path.into());
-        let id = AssetId::from_path(&canonical_path);
-
-        if let Some(existing) = self.entries.get(&id) {
-            if existing.path != canonical_path {
-                return Err(AssetError::Collision {
-                    path: canonical_path,
-                    existing_path: existing.path.clone(),
-                });
-            }
-        }
+        let raw = path.into();
+        let key = AssetKey::new(&raw).map_err(AssetError::InvalidPath)?;
+        let id = AssetId::from_key(&key);
+        self.check_collision(id, &key)?;
 
         self.entries.insert(
             id,
             AssetEntry {
-                path: canonical_path.clone(),
+                key: key.clone(),
                 value,
                 state: AssetState::Loaded,
             },
         );
-        self.paths.insert(canonical_path, id);
-
+        self.paths.insert(key, id);
         Ok(Handle::from_id(id))
     }
 
@@ -165,34 +191,45 @@ impl<T> Assets<T> {
     where
         F: FnOnce(&str) -> Result<T, E>,
     {
-        let canonical_path = normalize_path(&path.into());
-        if let Some(id) = self.paths.get(&canonical_path).copied() {
+        let raw = path.into();
+        let key = AssetKey::new(&raw).map_err(AssetError::InvalidPath)?;
+        if let Some(id) = self.paths.get(&key).copied() {
             return Ok(Handle::from_id(id));
         }
 
-        let value = loader(&canonical_path).map_err(AssetError::Loader)?;
-        let id = AssetId::from_path(&canonical_path);
-
+        let id = AssetId::from_key(&key);
         if let Some(existing) = self.entries.get(&id) {
-            if existing.path != canonical_path {
+            if existing.key != key {
                 return Err(AssetError::Collision {
-                    path: canonical_path,
-                    existing_path: existing.path.clone(),
+                    path: key.as_str().to_owned(),
+                    existing_path: existing.key.as_str().to_owned(),
                 });
             }
         }
 
+        let value = loader(key.as_str()).map_err(AssetError::Loader)?;
         self.entries.insert(
             id,
             AssetEntry {
-                path: canonical_path.clone(),
+                key: key.clone(),
                 value,
                 state: AssetState::Loaded,
             },
         );
-        self.paths.insert(canonical_path, id);
-
+        self.paths.insert(key, id);
         Ok(Handle::from_id(id))
+    }
+
+    fn check_collision<E>(&self, id: AssetId, key: &AssetKey) -> Result<(), AssetError<E>> {
+        if let Some(existing) = self.entries.get(&id) {
+            if existing.key != *key {
+                return Err(AssetError::Collision {
+                    path: key.as_str().to_owned(),
+                    existing_path: existing.key.as_str().to_owned(),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn get(&self, handle: Handle<T>) -> Option<&T> {
@@ -200,9 +237,7 @@ impl<T> Assets<T> {
     }
 
     pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
-        self.entries
-            .get_mut(&handle.id)
-            .map(|entry| &mut entry.value)
+        self.entries.get_mut(&handle.id).map(|entry| &mut entry.value)
     }
 
     pub fn state(&self, handle: Handle<T>) -> AssetState {
@@ -212,9 +247,7 @@ impl<T> Assets<T> {
     }
 
     pub fn path(&self, handle: Handle<T>) -> Option<&str> {
-        self.entries
-            .get(&handle.id)
-            .map(|entry| entry.path.as_str())
+        self.entries.get(&handle.id).map(|entry| entry.key.as_str())
     }
 
     pub fn len(&self) -> usize {
@@ -226,31 +259,51 @@ impl<T> Assets<T> {
     }
 }
 
-/// Sanitizes and canonicalizes asset relative paths to prevent directory traversal and casing mismatch.
-pub fn normalize_path(path: &str) -> String {
-    let raw = path.replace('\\', "/");
-    let without_drive = if let Some(idx) = raw.find(':') {
-        &raw[idx + 1..]
-    } else {
-        &raw
-    };
+/// Canonicalizes a relative virtual asset path. Attempts to escape the root are rejected.
+pub fn normalize_path(path: &str) -> Result<String, AssetPathError> {
+    if path.is_empty() {
+        return Err(AssetPathError::Empty);
+    }
+    if path.len() > MAX_ASSET_PATH_BYTES {
+        return Err(AssetPathError::TooLong);
+    }
+    if path.as_bytes().contains(&0) {
+        return Err(AssetPathError::NulByte);
+    }
 
-    let mut parts = Vec::new();
-    for part in without_drive.split('/') {
+    let raw = path.replace('\\', "/");
+    if raw.starts_with("//") {
+        return Err(AssetPathError::WindowsPrefix);
+    }
+    if raw.starts_with('/') {
+        return Err(AssetPathError::Absolute);
+    }
+    if raw.len() >= 2 && raw.as_bytes()[1] == b':' && raw.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(AssetPathError::WindowsPrefix);
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for part in raw.split('/') {
         match part {
-            "" | "." => continue,
+            "" | "." => {}
             ".." => {
-                parts.pop();
+                if parts.pop().is_none() {
+                    return Err(AssetPathError::ParentTraversal);
+                }
             }
             other => parts.push(other.to_lowercase()),
         }
     }
-    parts.join("/")
+
+    if parts.is_empty() {
+        return Err(AssetPathError::Empty);
+    }
+    Ok(parts.join("/"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AssetId, Assets, normalize_path};
+    use super::{AssetId, AssetPathError, Assets, normalize_path};
 
     #[test]
     fn asset_handles_are_typed_and_deduplicated_by_path() {
@@ -269,15 +322,34 @@ mod tests {
     }
 
     #[test]
-    fn path_normalization_prevents_traversal_and_casing_mismatch() {
+    fn normalization_resolves_only_in_root_parent_components() {
         assert_eq!(
             normalize_path("textures\\../textures/HERO.PNG"),
-            "textures/hero.png"
+            Ok("textures/hero.png".to_owned())
         );
-        assert_eq!(
-            normalize_path("C:\\Game/assets/../textures/hero.png"),
-            "game/textures/hero.png"
-        );
-        assert_eq!(normalize_path("../secret.txt"), "secret.txt");
+        assert_eq!(normalize_path("a/./b//c"), Ok("a/b/c".to_owned()));
+    }
+
+    #[test]
+    fn unsafe_paths_fail_closed() {
+        assert_eq!(normalize_path("../secret.txt"), Err(AssetPathError::ParentTraversal));
+        assert_eq!(normalize_path("../../secret.txt"), Err(AssetPathError::ParentTraversal));
+        assert_eq!(normalize_path("/etc/passwd"), Err(AssetPathError::Absolute));
+        assert_eq!(normalize_path("C:\\Game\\secret.txt"), Err(AssetPathError::WindowsPrefix));
+        assert_eq!(normalize_path("\\\\server\\share\\x"), Err(AssetPathError::WindowsPrefix));
+        assert_eq!(normalize_path("bad\0name"), Err(AssetPathError::NulByte));
+    }
+
+    #[test]
+    fn invalid_path_never_reaches_loader() {
+        let mut assets = Assets::<String>::new();
+        let mut called = false;
+        let result = assets.load_with("../secret.txt", |_| {
+            called = true;
+            Ok::<_, ()>("secret".to_owned())
+        });
+        assert!(!called);
+        assert!(result.is_err());
+        assert!(assets.is_empty());
     }
 }
