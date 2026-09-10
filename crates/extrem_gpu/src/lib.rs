@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Debug)]
@@ -65,7 +66,7 @@ impl GpuContext {
         })
     }
 
-    /// Creates a surface first, then requests an adapter explicitly compatible with it.
+    /// Creates a surface before adapter selection so the chosen adapter is actually presentable.
     pub fn for_surface(
         target: impl Into<wgpu::SurfaceTarget<'static>>,
         width: u32,
@@ -153,7 +154,7 @@ pub enum SurfaceFrame {
     Unavailable(SurfaceFrameStatus),
 }
 
-/// Configured window surface with explicit handling for every WGPU acquisition state.
+/// Configured window surface with explicit handling for every WGPU 30 acquisition state.
 pub struct SurfaceTarget {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -186,7 +187,7 @@ impl SurfaceTarget {
             .formats
             .iter()
             .copied()
-            .find(wgpu::TextureFormat::is_srgb)
+            .find(|format| format.is_srgb())
             .or_else(|| capabilities.formats.first().copied())
             .ok_or_else(|| GpuError::SurfaceCapabilities("no texture format".to_owned()))?;
         let alpha_mode = capabilities
@@ -274,5 +275,169 @@ impl SurfaceTarget {
                 SurfaceFrame::Unavailable(SurfaceFrameStatus::Validation)
             }
         }
+    }
+}
+
+const VALIDATION_TRIANGLE_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec3f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+    var positions = array<vec2f, 3>(
+        vec2f(0.0, 0.55),
+        vec2f(-0.55, -0.45),
+        vec2f(0.55, -0.45),
+    );
+    var colors = array<vec3f, 3>(
+        vec3f(0.95, 0.25, 0.25),
+        vec3f(0.25, 0.95, 0.35),
+        vec3f(0.25, 0.45, 0.95),
+    );
+    var output: VertexOutput;
+    output.position = vec4f(positions[index], 0.0, 1.0);
+    output.color = colors[index];
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    return vec4f(input.color, 1.0);
+}
+"#;
+
+/// A minimal real WGPU presenter. It validates the complete surface→pipeline→draw→present path
+/// without pretending to implement the future mesh/material renderer.
+pub struct WgpuPresenter {
+    context: GpuContext,
+    surface: SurfaceTarget,
+    pipeline: wgpu::RenderPipeline,
+    last_status: Option<SurfaceFrameStatus>,
+}
+
+impl WgpuPresenter {
+    pub fn for_surface(
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, GpuError> {
+        let (context, surface) = GpuContext::for_surface(target, width, height)?;
+        Ok(Self::new(context, surface))
+    }
+
+    pub fn new(context: GpuContext, surface: SurfaceTarget) -> Self {
+        let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ExtremEngine validation triangle shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(VALIDATION_TRIANGLE_SHADER)),
+        });
+        let color_targets = [Some(wgpu::ColorTargetState {
+            format: surface.format(),
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let pipeline = context
+            .device()
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("ExtremEngine validation triangle pipeline"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &color_targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        Self {
+            context,
+            surface,
+            pipeline,
+            last_status: None,
+        }
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        self.surface.resize(self.context.device(), width, height)
+    }
+
+    pub fn last_status(&self) -> Option<SurfaceFrameStatus> {
+        self.last_status
+    }
+
+    pub fn adapter_name(&self) -> String {
+        self.context.adapter_name()
+    }
+
+    /// Renders and presents one validation triangle. Recoverable surface loss is reconfigured once.
+    pub fn render_validation_frame(&mut self) -> SurfaceFrameStatus {
+        let mut acquired = self.surface.acquire_frame();
+        if matches!(
+            acquired,
+            SurfaceFrame::Unavailable(SurfaceFrameStatus::Lost | SurfaceFrameStatus::Outdated)
+        ) {
+            self.surface.reconfigure(self.context.device());
+            acquired = self.surface.acquire_frame();
+        }
+
+        let status = match acquired {
+            SurfaceFrame::Renderable { texture, status } => {
+                let view = texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder = self
+                    .context
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("ExtremEngine validation frame encoder"),
+                    });
+                {
+                    let color_attachment = Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.025,
+                                g: 0.035,
+                                b: 0.055,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    });
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("ExtremEngine validation triangle pass"),
+                        color_attachments: &[color_attachment],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.pipeline);
+                    pass.draw(0..3, 0..1);
+                }
+                self.context.queue().submit(Some(encoder.finish()));
+                self.context.queue().present(texture);
+                if status == SurfaceFrameStatus::Suboptimal {
+                    self.surface.reconfigure(self.context.device());
+                }
+                status
+            }
+            SurfaceFrame::Unavailable(status) => status,
+        };
+        self.last_status = Some(status);
+        status
     }
 }
