@@ -427,7 +427,7 @@ impl Mat4 {
         matrix
     }
 
-    /// Right-handed perspective projection matching the repository's existing convention.
+    /// Right-handed perspective projection with WebGPU depth mapping: near→0, far→1.
     pub fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y_radians * 0.5).tan();
         let inverse_depth = 1.0 / (near - far);
@@ -435,12 +435,13 @@ impl Mat4 {
             data: [
                 f / aspect, 0.0, 0.0, 0.0,
                 0.0, f, 0.0, 0.0,
-                0.0, 0.0, (far + near) * inverse_depth, -1.0,
-                0.0, 0.0, (2.0 * far * near) * inverse_depth, 0.0,
+                0.0, 0.0, far * inverse_depth, -1.0,
+                0.0, 0.0, (far * near) * inverse_depth, 0.0,
             ],
         }
     }
 
+    /// Right-handed orthographic projection with WebGPU depth mapping: near→0, far→1.
     pub fn orthographic(width: f32, height: f32, near: f32, far: f32) -> Self {
         Self {
             data: [
@@ -511,7 +512,6 @@ mod tests {
         let qy = Quat::from_axis_angle(Vec3::Y, -0.37);
         let qz = Quat::from_axis_angle(Vec3::Z, 1.13);
         let point = Vec3::new(0.3, -2.0, 4.5);
-
         approx_vec((qy * qx).rotate_vec3(point), qy.rotate_vec3(qx.rotate_vec3(point)));
         approx_vec(
             (qz * qy * qx).rotate_vec3(point),
@@ -562,6 +562,15 @@ mod tests {
         };
         let point = Vec3::new(0.5, -1.0, 2.0);
         approx_vec(transform.to_mat4().transform_point3(point), transform.transform_point(point));
+    }
+
+    #[test]
+    fn perspective_maps_near_and_far_to_webgpu_depth_range() {
+        let near = 0.1;
+        let far = 100.0;
+        let projection = Mat4::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+        approx(projection.transform_point3(Vec3::new(0.0, 0.0, -near)).z, 0.0);
+        approx(projection.transform_point3(Vec3::new(0.0, 0.0, -far)).z, 1.0);
     }
 
     #[test]
