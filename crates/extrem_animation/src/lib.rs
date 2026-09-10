@@ -10,7 +10,7 @@ const QUATERNION_NORM_TOLERANCE: f32 = 1.0e-3;
 pub struct JointId(pub usize);
 
 /// Joint node representation with bind pose and inverse bind matrix.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Joint {
     pub name: String,
     pub parent: Option<JointId>,
@@ -73,7 +73,7 @@ impl fmt::Display for AnimationError {
 impl std::error::Error for AnimationError {}
 
 /// Verified skeleton hierarchy for skeletal mesh skinning and pose propagation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Skeleton {
     joints: Vec<Joint>,
 }
@@ -127,13 +127,13 @@ pub enum InterpolationMode {
     Slerp,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Keyframe<T> {
     pub time: f32,
     pub value: T,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track<T> {
     pub joint: JointId,
     pub interpolation: InterpolationMode,
@@ -164,7 +164,7 @@ impl<T> Track<T> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnimationClip {
     pub name: String,
     pub duration: f32,
