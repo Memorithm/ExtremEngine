@@ -1,15 +1,15 @@
 use extrem_ecs::Entity;
+use extrem_gpu::{GpuContext, GpuError, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
 use extrem_math::{Mat4, Vec3};
+use std::borrow::Cow;
 use std::fmt;
 
-/// Information known when a frame begins.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameInfo {
     pub index: u64,
     pub delta_seconds: f32,
 }
 
-/// Render-side command extracted from the game world.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderCommand {
     SetCamera {
@@ -22,11 +22,9 @@ pub enum RenderCommand {
     },
 }
 
-/// Stable identifier for a render graph pass.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RenderPassId(usize);
 
-/// Render graph compilation errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderGraphError {
     MissingPass(RenderPassId),
@@ -36,9 +34,7 @@ pub enum RenderGraphError {
 impl fmt::Display for RenderGraphError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingPass(id) => {
-                write!(formatter, "render graph references missing pass {id:?}")
-            }
+            Self::MissingPass(id) => write!(formatter, "render graph references missing pass {id:?}"),
             Self::Cycle(id) => write!(formatter, "render graph contains a cycle at pass {id:?}"),
         }
     }
@@ -52,14 +48,12 @@ struct RenderPass {
     dependencies: Vec<RenderPassId>,
 }
 
-/// Execution plan produced by compiling a [`RenderGraph`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRenderGraph {
     pub version: u64,
     pub execution_order: Vec<RenderPassId>,
 }
 
-/// Deterministic dependency graph for render passes with compilation caching.
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     passes: Vec<RenderPass>,
@@ -82,8 +76,7 @@ impl RenderGraph {
             name: name.into(),
             dependencies: Vec::new(),
         });
-        self.version = self.version.wrapping_add(1);
-        self.cached_plan = None;
+        self.invalidate();
         id
     }
 
@@ -98,14 +91,20 @@ impl RenderGraph {
         if self.passes.get(dependency.0).is_none() {
             return Err(RenderGraphError::MissingPass(dependency));
         }
-        self.passes[pass.0].dependencies.push(dependency);
-        self.version = self.version.wrapping_add(1);
-        self.cached_plan = None;
+        if !self.passes[pass.0].dependencies.contains(&dependency) {
+            self.passes[pass.0].dependencies.push(dependency);
+            self.passes[pass.0].dependencies.sort_unstable();
+            self.invalidate();
+        }
         Ok(())
     }
 
     pub fn pass_name(&self, pass: RenderPassId) -> Option<&str> {
         self.passes.get(pass.0).map(|pass| pass.name.as_str())
+    }
+
+    pub fn cached_plan(&self) -> Option<&CompiledRenderGraph> {
+        self.cached_plan.as_ref()
     }
 
     pub fn compile(&mut self) -> Result<CompiledRenderGraph, RenderGraphError> {
@@ -120,13 +119,19 @@ impl RenderGraph {
         for index in 0..self.passes.len() {
             visit_pass(index, self, &mut states, &mut order)?;
         }
-
         let plan = CompiledRenderGraph {
             version: self.version,
             execution_order: order,
         };
         self.cached_plan = Some(plan.clone());
         Ok(plan)
+    }
+
+    fn invalidate(&mut self) {
+        // Wrapping only invalidates an optimization cache; it cannot create an incorrect plan because
+        // every mutation also clears cached_plan.
+        self.version = self.version.wrapping_add(1);
+        self.cached_plan = None;
     }
 }
 
@@ -153,21 +158,18 @@ fn visit_pass(
     Ok(())
 }
 
-/// Basic statistics exposed by a renderer after a frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
     pub submitted_commands: usize,
     pub drawn_pixels: usize,
 }
 
-/// Backend boundary. A future `wgpu`, Vulkan or software backend can implement it.
 pub trait RenderBackend {
     fn begin_frame(&mut self, info: FrameInfo);
     fn submit(&mut self, command: RenderCommand);
     fn end_frame(&mut self) -> FrameStats;
 }
 
-/// Renderer used by tests, tools and the first headless engine executable.
 #[derive(Clone, Debug, Default)]
 pub struct NullRenderer {
     frame: Option<FrameInfo>,
@@ -202,7 +204,6 @@ impl RenderBackend for NullRenderer {
     }
 }
 
-/// Minimal deterministic CPU renderer useful for tests, screenshots and CI.
 #[derive(Clone, Debug)]
 pub struct CpuRenderer {
     width: u32,
@@ -255,6 +256,9 @@ impl CpuRenderer {
     }
 
     fn draw_marker(&mut self, x: f32, y: f32) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
         let center_x = ((x * 0.05 + 0.5) * self.width as f32) as i32;
         let center_y = ((0.5 - y * 0.05) * self.height as f32) as i32;
         for offset_y in -3..=3 {
@@ -270,7 +274,7 @@ impl CpuRenderer {
                 }
                 let index = ((pixel_y as u32 * self.width + pixel_x as u32) * 3) as usize;
                 self.pixels[index..index + 3].copy_from_slice(&[92, 201, 255]);
-                self.drawn_pixels += 1;
+                self.drawn_pixels = self.drawn_pixels.saturating_add(1);
             }
         }
     }
@@ -305,6 +309,217 @@ impl RenderBackend for CpuRenderer {
     }
 }
 
+const TRIANGLE_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec3f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+    var positions = array<vec2f, 3>(
+        vec2f(0.0, 0.55),
+        vec2f(-0.55, -0.45),
+        vec2f(0.55, -0.45),
+    );
+    var colors = array<vec3f, 3>(
+        vec3f(0.95, 0.25, 0.25),
+        vec3f(0.25, 0.95, 0.35),
+        vec3f(0.25, 0.45, 0.95),
+    );
+    var output: VertexOutput;
+    output.position = vec4f(positions[index], 0.0, 1.0);
+    output.color = colors[index];
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    return vec4f(input.color, 1.0);
+}
+"#;
+
+struct PendingGpuFrame {
+    texture: wgpu::SurfaceTexture,
+    commands: wgpu::CommandBuffer,
+    status: SurfaceFrameStatus,
+}
+
+/// First presentable WGPU backend. It deliberately renders a built-in validation triangle;
+/// world mesh/material extraction remains a later layer rather than being faked here.
+pub struct WgpuRenderer {
+    context: GpuContext,
+    surface: SurfaceTarget,
+    pipeline: wgpu::RenderPipeline,
+    pending: Option<PendingGpuFrame>,
+    submitted_commands: usize,
+    last_stats: FrameStats,
+    last_surface_status: Option<SurfaceFrameStatus>,
+}
+
+impl WgpuRenderer {
+    pub fn for_surface(
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, GpuError> {
+        let (context, surface) = GpuContext::for_surface(target, width, height)?;
+        Ok(Self::new(context, surface))
+    }
+
+    pub fn new(context: GpuContext, surface: SurfaceTarget) -> Self {
+        let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ExtremEngine validation triangle shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TRIANGLE_SHADER)),
+        });
+        let targets = [Some(wgpu::ColorTargetState {
+            format: surface.format(),
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let pipeline = context
+            .device()
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("ExtremEngine validation triangle pipeline"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        Self {
+            context,
+            surface,
+            pipeline,
+            pending: None,
+            submitted_commands: 0,
+            last_stats: FrameStats::default(),
+            last_surface_status: None,
+        }
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        // Callers must resize only between frames; pending is dropped first to satisfy WGPU's
+        // requirement that no acquired SurfaceTexture remains alive across configure().
+        self.pending = None;
+        self.surface.resize(self.context.device(), width, height)
+    }
+
+    pub fn last_surface_status(&self) -> Option<SurfaceFrameStatus> {
+        self.last_surface_status
+    }
+
+    pub fn adapter_name(&self) -> String {
+        self.context.adapter_name()
+    }
+
+    fn encode_validation_frame(&self, texture: &wgpu::SurfaceTexture) -> wgpu::CommandBuffer {
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .context
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ExtremEngine validation frame encoder"),
+            });
+        let color_attachment = Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.025,
+                    g: 0.035,
+                    b: 0.055,
+                    a: 1.0,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ExtremEngine validation triangle pass"),
+                color_attachments: &[color_attachment],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.finish()
+    }
+
+    fn acquire_pending_frame(&mut self) {
+        let mut acquisition = self.surface.acquire_frame();
+        if matches!(
+            acquisition,
+            SurfaceFrame::Unavailable(SurfaceFrameStatus::Lost | SurfaceFrameStatus::Outdated)
+        ) {
+            self.surface.reconfigure(self.context.device());
+            acquisition = self.surface.acquire_frame();
+        }
+
+        match acquisition {
+            SurfaceFrame::Renderable { texture, status } => {
+                let commands = self.encode_validation_frame(&texture);
+                self.last_surface_status = Some(status);
+                self.pending = Some(PendingGpuFrame {
+                    texture,
+                    commands,
+                    status,
+                });
+            }
+            SurfaceFrame::Unavailable(status) => {
+                self.last_surface_status = Some(status);
+                self.pending = None;
+            }
+        }
+    }
+}
+
+impl RenderBackend for WgpuRenderer {
+    fn begin_frame(&mut self, _info: FrameInfo) {
+        self.pending = None;
+        self.submitted_commands = 0;
+        self.acquire_pending_frame();
+    }
+
+    fn submit(&mut self, _command: RenderCommand) {
+        self.submitted_commands = self.submitted_commands.saturating_add(1);
+    }
+
+    fn end_frame(&mut self) -> FrameStats {
+        if let Some(frame) = self.pending.take() {
+            self.context.queue().submit(Some(frame.commands));
+            self.context.queue().present(frame.texture);
+            if frame.status == SurfaceFrameStatus::Suboptimal {
+                self.surface.reconfigure(self.context.device());
+            }
+        }
+        self.last_stats = FrameStats {
+            submitted_commands: self.submitted_commands,
+            drawn_pixels: 0,
+        };
+        self.last_stats
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -314,21 +529,29 @@ mod tests {
     use extrem_math::Vec3;
 
     #[test]
-    fn graph_compiles_dependencies_before_consumers() {
+    fn graph_compiles_dependencies_before_consumers_and_reuses_cache() {
         let mut graph = RenderGraph::new();
         let clear = graph.add_pass("clear");
         let opaque = graph.add_pass("opaque");
         let ui = graph.add_pass("ui");
         graph.add_dependency(opaque, clear).expect("dependency");
         graph.add_dependency(ui, opaque).expect("dependency");
-
         let compiled = graph.compile().expect("acyclic graph");
         assert_eq!(compiled.execution_order, vec![clear, opaque, ui]);
-
-        // Caching verification: compiling unchanged graph returns same cached plan version
+        assert_eq!(graph.cached_plan(), Some(&compiled));
         let cached = graph.compile().expect("cached graph");
-        assert_eq!(compiled.version, cached.version);
-        assert_eq!(compiled.execution_order, cached.execution_order);
+        assert_eq!(compiled, cached);
+    }
+
+    #[test]
+    fn duplicate_dependency_does_not_invalidate_cache() {
+        let mut graph = RenderGraph::new();
+        let a = graph.add_pass("a");
+        let b = graph.add_pass("b");
+        graph.add_dependency(b, a).expect("dependency");
+        let compiled = graph.compile().expect("compile");
+        graph.add_dependency(b, a).expect("duplicate dependency");
+        assert_eq!(graph.cached_plan(), Some(&compiled));
     }
 
     #[test]
