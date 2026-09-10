@@ -4,11 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Replaceable rendering contracts for ExtremEngine"
+description = "Replaceable rendering contracts and WGPU backend for ExtremEngine"
 
 [dependencies]
 extrem_ecs = { path = "../extrem_ecs" }
+extrem_gpu = { path = "../extrem_gpu" }
 extrem_math = { path = "../extrem_math" }
+wgpu = "30"
 
 [lints]
 workspace = true
