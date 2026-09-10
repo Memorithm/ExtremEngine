@@ -55,8 +55,9 @@ mod tests {
     #[test]
     fn null_backend_records_commands() {
         let mut backend = NullAudioBackend::default();
+        let source = AssetId::from_path("audio/click.ogg").expect("literal asset path is valid");
         backend.submit(AudioCommand::Play {
-            source: AssetId::from_path("audio/click.ogg"),
+            source,
             volume: 0.8,
             looping: false,
         });
