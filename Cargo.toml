@@ -15,6 +15,7 @@ members = [
     "crates/extrem_gpu",
     "crates/extrem_input",
     "crates/extrem_window",
+    "crates/extrem_animation",
 ]
 
 [workspace.package]

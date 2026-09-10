@@ -190,6 +190,9 @@ impl App {
             run_systems(&mut self.fixed_update_systems, &mut self.world, fixed_time);
             fixed_steps += 1;
         }
+        if fixed_steps >= self.max_fixed_steps_per_frame {
+            self.fixed_accumulator = self.fixed_accumulator.min(self.fixed_delta_seconds);
+        }
         let frame_time = self.time;
         self.world.insert_resource(frame_time);
         run_systems(&mut self.update_systems, &mut self.world, frame_time);
