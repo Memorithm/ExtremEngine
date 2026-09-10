@@ -38,29 +38,43 @@ impl Default for Time {
 
 impl Time {
     fn advance_frame(&mut self, delta_seconds: f32, fixed_delta_seconds: f32) {
-        self.delta_seconds = delta_seconds.max(0.0);
-        self.elapsed_seconds += self.delta_seconds;
+        self.delta_seconds = if delta_seconds.is_finite() && delta_seconds > 0.0 {
+            delta_seconds
+        } else {
+            0.0
+        };
+        let next_elapsed = self.elapsed_seconds + self.delta_seconds;
+        self.elapsed_seconds = if next_elapsed.is_finite() {
+            next_elapsed
+        } else {
+            f32::MAX
+        };
         self.frame = self.frame.saturating_add(1);
         self.fixed_delta_seconds = fixed_delta_seconds;
         self.fixed_steps_this_frame = 0;
     }
 
     fn advance_fixed_step(&mut self) {
-        self.fixed_elapsed_seconds += self.fixed_delta_seconds;
+        let next_fixed = self.fixed_elapsed_seconds + self.fixed_delta_seconds;
+        self.fixed_elapsed_seconds = if next_fixed.is_finite() {
+            next_fixed
+        } else {
+            f32::MAX
+        };
         self.fixed_step = self.fixed_step.saturating_add(1);
         self.fixed_steps_this_frame = self.fixed_steps_this_frame.saturating_add(1);
     }
 }
 
-/// Small summary returned after an application update.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateReport {
     pub frame: u64,
     pub delta_seconds: f32,
     pub elapsed_seconds: f32,
+    /// True when whole fixed steps were deliberately dropped to respect the configured frame cap.
+    pub fixed_debt_dropped: bool,
 }
 
-/// Extension point for engine subsystems.
 pub trait Plugin {
     fn build(&self, app: &mut App);
 
@@ -69,7 +83,6 @@ pub trait Plugin {
     }
 }
 
-/// Default plugin group for a headless or test-oriented application.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MinimalPlugins;
 
@@ -81,7 +94,7 @@ impl Plugin for MinimalPlugins {
 
 type System = Box<dyn FnMut(&mut World, Time)>;
 
-/// Owns the ECS world and executes systems in deterministic stages.
+/// Owns the ECS world and executes systems in deterministic stage/insertion order.
 pub struct App {
     pub world: World,
     time: Time,
@@ -143,6 +156,8 @@ impl App {
         if fixed_delta_seconds.is_finite() && fixed_delta_seconds > 0.0 {
             self.fixed_delta_seconds = fixed_delta_seconds;
             self.time.fixed_delta_seconds = fixed_delta_seconds;
+            // Keep an old accumulator valid after a timestep reconfiguration.
+            self.fixed_accumulator = self.fixed_accumulator.rem_euclid(fixed_delta_seconds);
         }
         self
     }
@@ -172,6 +187,9 @@ impl App {
         self.time
             .advance_frame(delta_seconds, self.fixed_delta_seconds);
         self.fixed_accumulator += self.time.delta_seconds;
+        if !self.fixed_accumulator.is_finite() {
+            self.fixed_accumulator = 0.0;
+        }
         let time = self.time;
         self.world.insert_resource(time);
 
@@ -179,6 +197,7 @@ impl App {
             run_systems(&mut self.startup_systems, &mut self.world, time);
             self.startup_complete = true;
         }
+
         let mut fixed_steps = 0;
         while self.fixed_accumulator >= self.fixed_delta_seconds
             && fixed_steps < self.max_fixed_steps_per_frame
@@ -190,9 +209,13 @@ impl App {
             run_systems(&mut self.fixed_update_systems, &mut self.world, fixed_time);
             fixed_steps += 1;
         }
-        if fixed_steps >= self.max_fixed_steps_per_frame {
-            self.fixed_accumulator = self.fixed_accumulator.min(self.fixed_delta_seconds);
+
+        let fixed_debt_dropped = self.fixed_accumulator >= self.fixed_delta_seconds;
+        if fixed_debt_dropped {
+            // Drop only whole overdue steps; preserve interpolation-relevant sub-step residue.
+            self.fixed_accumulator = self.fixed_accumulator.rem_euclid(self.fixed_delta_seconds);
         }
+
         let frame_time = self.time;
         self.world.insert_resource(frame_time);
         run_systems(&mut self.update_systems, &mut self.world, frame_time);
@@ -203,6 +226,7 @@ impl App {
             frame: frame_time.frame,
             delta_seconds: frame_time.delta_seconds,
             elapsed_seconds: frame_time.elapsed_seconds,
+            fixed_debt_dropped,
         }
     }
 
@@ -217,7 +241,6 @@ fn run_systems(systems: &mut [System], world: &mut World, time: Time) {
     }
 }
 
-/// Convenience result type for systems that perform world operations.
 pub type AppResult<T> = Result<T, WorldError>;
 
 #[cfg(test)]
@@ -235,7 +258,6 @@ mod tests {
             let value = world.get_resource_mut::<u32>().expect("startup resource");
             *value += 1;
         });
-
         app.run_for(3, 1.0 / 60.0);
         assert_eq!(app.world().get_resource::<u32>(), Some(&4));
         assert_eq!(app.time().frame, 3);
@@ -250,10 +272,31 @@ mod tests {
             *value += 1;
         });
         app.world_mut().insert_resource(0_u32);
-
-        app.update(0.25);
+        let report = app.update(0.25);
         assert_eq!(app.world().get_resource::<u32>(), Some(&2));
         assert_eq!(app.time().fixed_steps_this_frame, 2);
         assert_eq!(app.time().fixed_step, 2);
+        assert!(!report.fixed_debt_dropped);
+    }
+
+    #[test]
+    fn non_finite_delta_does_not_poison_time() {
+        let mut app = App::new();
+        let report = app.update(f32::INFINITY);
+        assert_eq!(report.delta_seconds, 0.0);
+        assert!(report.elapsed_seconds.is_finite());
+        assert!(app.time().fixed_elapsed_seconds.is_finite());
+    }
+
+    #[test]
+    fn fixed_step_cap_drops_whole_debt_and_reports_it() {
+        let mut app = App::new();
+        app.set_fixed_timestep(0.1).set_max_fixed_steps_per_frame(2);
+        let report = app.update(0.55);
+        assert_eq!(app.time().fixed_steps_this_frame, 2);
+        assert!(report.fixed_debt_dropped);
+        let next = app.update(0.05);
+        assert!(!next.fixed_debt_dropped);
+        assert_eq!(app.time().fixed_steps_this_frame, 1);
     }
 }

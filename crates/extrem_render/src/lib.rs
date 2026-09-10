@@ -2,14 +2,12 @@ use extrem_ecs::Entity;
 use extrem_math::{Mat4, Vec3};
 use std::fmt;
 
-/// Information known when a frame begins.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameInfo {
     pub index: u64,
     pub delta_seconds: f32,
 }
 
-/// Render-side command extracted from the game world.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderCommand {
     SetCamera {
@@ -22,11 +20,9 @@ pub enum RenderCommand {
     },
 }
 
-/// Stable identifier for a render graph pass.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RenderPassId(usize);
 
-/// Render graph compilation errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderGraphError {
     MissingPass(RenderPassId),
@@ -36,9 +32,7 @@ pub enum RenderGraphError {
 impl fmt::Display for RenderGraphError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingPass(id) => {
-                write!(formatter, "render graph references missing pass {id:?}")
-            }
+            Self::MissingPass(id) => write!(formatter, "render graph references missing pass {id:?}"),
             Self::Cycle(id) => write!(formatter, "render graph contains a cycle at pass {id:?}"),
         }
     }
@@ -52,14 +46,13 @@ struct RenderPass {
     dependencies: Vec<RenderPassId>,
 }
 
-/// Execution plan produced by compiling a [`RenderGraph`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRenderGraph {
     pub version: u64,
     pub execution_order: Vec<RenderPassId>,
 }
 
-/// Deterministic dependency graph for render passes with compilation caching.
+/// Backend-neutral deterministic dependency graph with topology-versioned plan caching.
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     passes: Vec<RenderPass>,
@@ -82,8 +75,7 @@ impl RenderGraph {
             name: name.into(),
             dependencies: Vec::new(),
         });
-        self.version = self.version.wrapping_add(1);
-        self.cached_plan = None;
+        self.invalidate();
         id
     }
 
@@ -98,14 +90,20 @@ impl RenderGraph {
         if self.passes.get(dependency.0).is_none() {
             return Err(RenderGraphError::MissingPass(dependency));
         }
-        self.passes[pass.0].dependencies.push(dependency);
-        self.version = self.version.wrapping_add(1);
-        self.cached_plan = None;
+        if !self.passes[pass.0].dependencies.contains(&dependency) {
+            self.passes[pass.0].dependencies.push(dependency);
+            self.passes[pass.0].dependencies.sort_unstable();
+            self.invalidate();
+        }
         Ok(())
     }
 
     pub fn pass_name(&self, pass: RenderPassId) -> Option<&str> {
         self.passes.get(pass.0).map(|pass| pass.name.as_str())
+    }
+
+    pub fn cached_plan(&self) -> Option<&CompiledRenderGraph> {
+        self.cached_plan.as_ref()
     }
 
     pub fn compile(&mut self) -> Result<CompiledRenderGraph, RenderGraphError> {
@@ -120,13 +118,17 @@ impl RenderGraph {
         for index in 0..self.passes.len() {
             visit_pass(index, self, &mut states, &mut order)?;
         }
-
         let plan = CompiledRenderGraph {
             version: self.version,
             execution_order: order,
         };
         self.cached_plan = Some(plan.clone());
         Ok(plan)
+    }
+
+    fn invalidate(&mut self) {
+        self.version = self.version.wrapping_add(1);
+        self.cached_plan = None;
     }
 }
 
@@ -153,21 +155,18 @@ fn visit_pass(
     Ok(())
 }
 
-/// Basic statistics exposed by a renderer after a frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
     pub submitted_commands: usize,
     pub drawn_pixels: usize,
 }
 
-/// Backend boundary. A future `wgpu`, Vulkan or software backend can implement it.
 pub trait RenderBackend {
     fn begin_frame(&mut self, info: FrameInfo);
     fn submit(&mut self, command: RenderCommand);
     fn end_frame(&mut self) -> FrameStats;
 }
 
-/// Renderer used by tests, tools and the first headless engine executable.
 #[derive(Clone, Debug, Default)]
 pub struct NullRenderer {
     frame: Option<FrameInfo>,
@@ -202,7 +201,6 @@ impl RenderBackend for NullRenderer {
     }
 }
 
-/// Minimal deterministic CPU renderer useful for tests, screenshots and CI.
 #[derive(Clone, Debug)]
 pub struct CpuRenderer {
     width: u32,
@@ -255,6 +253,9 @@ impl CpuRenderer {
     }
 
     fn draw_marker(&mut self, x: f32, y: f32) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
         let center_x = ((x * 0.05 + 0.5) * self.width as f32) as i32;
         let center_y = ((0.5 - y * 0.05) * self.height as f32) as i32;
         for offset_y in -3..=3 {
@@ -270,7 +271,7 @@ impl CpuRenderer {
                 }
                 let index = ((pixel_y as u32 * self.width + pixel_x as u32) * 3) as usize;
                 self.pixels[index..index + 3].copy_from_slice(&[92, 201, 255]);
-                self.drawn_pixels += 1;
+                self.drawn_pixels = self.drawn_pixels.saturating_add(1);
             }
         }
     }
@@ -314,21 +315,28 @@ mod tests {
     use extrem_math::Vec3;
 
     #[test]
-    fn graph_compiles_dependencies_before_consumers() {
+    fn graph_compiles_dependencies_before_consumers_and_reuses_cache() {
         let mut graph = RenderGraph::new();
         let clear = graph.add_pass("clear");
         let opaque = graph.add_pass("opaque");
         let ui = graph.add_pass("ui");
         graph.add_dependency(opaque, clear).expect("dependency");
         graph.add_dependency(ui, opaque).expect("dependency");
-
         let compiled = graph.compile().expect("acyclic graph");
         assert_eq!(compiled.execution_order, vec![clear, opaque, ui]);
+        assert_eq!(graph.cached_plan(), Some(&compiled));
+        assert_eq!(graph.compile().expect("cached graph"), compiled);
+    }
 
-        // Caching verification: compiling unchanged graph returns same cached plan version
-        let cached = graph.compile().expect("cached graph");
-        assert_eq!(compiled.version, cached.version);
-        assert_eq!(compiled.execution_order, cached.execution_order);
+    #[test]
+    fn duplicate_dependency_does_not_invalidate_cache() {
+        let mut graph = RenderGraph::new();
+        let a = graph.add_pass("a");
+        let b = graph.add_pass("b");
+        graph.add_dependency(b, a).expect("dependency");
+        let compiled = graph.compile().expect("compile");
+        graph.add_dependency(b, a).expect("duplicate dependency");
+        assert_eq!(graph.cached_plan(), Some(&compiled));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 # 3D Transform Mathematics in ExtremEngine
 
-## Local and World Transforms
+## Representation
 
-Entities in ExtremEngine hold a `Transform` representing local position, orientation, and scale:
+`Transform` stores translation, quaternion orientation and component-wise scale:
 
 ```rust
 pub struct Transform {
@@ -12,33 +12,37 @@ pub struct Transform {
 }
 ```
 
-## Hierarchy Composition
+Engine-created rotations use normalized quaternions. `Quat` multiplication implements the Hamilton product and is regression-tested against sequential non-trivial rotations.
 
-When computing global transforms down a scene hierarchy, local-to-parent composition follows rigid/affine composition rules:
+## Hierarchy composition
 
-$$T_{\text{global}} = T_{\text{parent}} + R_{\text{parent}} \cdot (S_{\text{parent}} \odot T_{\text{local}})$$
-$$R_{\text{global}} = R_{\text{parent}} \otimes R_{\text{local}}$$
-$$S_{\text{global}} = S_{\text{parent}} \odot S_{\text{local}}$$
+For representable TRS composition:
 
-In Rust code:
+$$T_g = T_p + R_p(S_p \odot T_l)$$
 
-```rust
-pub fn combine(parent: Self, local: Self) -> Self {
-    let scaled_translation = local.translation.component_mul(parent.scale);
-    let rotated_translation = parent.rotation.rotate_vec3(scaled_translation);
+$$R_g = R_p \otimes R_l$$
 
-    Self {
-        translation: parent.translation + rotated_translation,
-        rotation: (parent.rotation * local.rotation).normalized(),
-        scale: parent.scale.component_mul(local.scale),
-    }
-}
-```
+$$S_g = S_p \odot S_l$$
 
-## Camera Transformations
+Parent rotation therefore rotates the scaled child translation; rotations are not added as Euler vectors.
 
-Camera view matrices invert the camera entity's world transform:
+### Important TRS limitation
 
-$$V = R_{\text{camera}}^{-1} \cdot T_{\text{camera}}^{-1}$$
+A single translation/rotation/component-scale triple cannot represent arbitrary shear. Combining non-uniform scale with differently oriented parent/child transforms can mathematically generate shear. `Transform::combine` remains a TRS operation and must not be described as an exact representation of every affine transform. Systems that require arbitrary affine composition should operate on `Mat4` or a future explicit affine type.
 
-Depth projection conventions match WGPU clip space expectations ([0, 1] Z depth range).
+## Camera transformations
+
+Camera view matrices invert world rotation and translation:
+
+$$V = R^{-1} T^{-1}$$
+
+Camera scale is not part of the viewing model.
+
+## WebGPU projection convention
+
+ExtremEngine uses a right-handed camera convention looking along negative Z and maps depth into WebGPU's normalized range:
+
+- near plane → `z = 0`
+- far plane → `z = 1`
+
+Both perspective and orthographic matrices use this convention. Regression tests project explicit near/far points to guard against accidental reintroduction of OpenGL `[-1,1]` depth formulas.

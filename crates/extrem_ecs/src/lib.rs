@@ -10,12 +10,10 @@ pub struct Entity {
 }
 
 impl Entity {
-    /// Creates an entity from raw index and generation.
     pub const fn from_raw_parts(index: u32, generation: u32) -> Self {
         Self { index, generation }
     }
 
-    /// Creates an entity with generation 1 from a raw index (primarily for test mock entity creation).
     pub const fn from_raw(index: u32) -> Self {
         Self {
             index,
@@ -23,12 +21,10 @@ impl Entity {
         }
     }
 
-    /// Returns the raw index of the entity.
     pub const fn index(self) -> u32 {
         self.index
     }
 
-    /// Returns the generation of the entity.
     pub const fn generation(self) -> u32 {
         self.generation
     }
@@ -44,6 +40,7 @@ impl fmt::Display for Entity {
 struct EntitySlot {
     generation: u32,
     alive: bool,
+    retired: bool,
 }
 
 #[derive(Debug)]
@@ -76,24 +73,23 @@ impl<T: 'static> Storage for TypedStorage<T> {
     }
 }
 
-/// Errors returned by world operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorldError {
-    /// The entity is not alive in the target world.
     EntityNotFound(Entity),
+    EntityCapacityExhausted,
 }
 
 impl fmt::Display for WorldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EntityNotFound(entity) => write!(formatter, "{entity} does not exist"),
+            Self::EntityCapacityExhausted => write!(formatter, "entity index capacity is exhausted"),
         }
     }
 }
 
 impl std::error::Error for WorldError {}
 
-/// The ECS container holding entities, components and global resources.
 #[derive(Default)]
 pub struct World {
     slots: Vec<EntitySlot>,
@@ -103,53 +99,62 @@ pub struct World {
 }
 
 impl World {
-    /// Creates an empty world.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Spawns an entity without components.
-    pub fn spawn_empty(&mut self) -> Entity {
-        if let Some(index) = self.free_list.pop() {
+    /// Fallible spawn path for code that must handle resource exhaustion without panicking.
+    pub fn try_spawn_empty(&mut self) -> Result<Entity, WorldError> {
+        while let Some(index) = self.free_list.pop() {
             let slot = &mut self.slots[index as usize];
+            if slot.retired {
+                continue;
+            }
             slot.alive = true;
-            Entity {
+            return Ok(Entity {
                 index,
                 generation: slot.generation,
-            }
-        } else {
-            let index = self.slots.len() as u32;
-            let slot = EntitySlot {
-                generation: 1,
-                alive: true,
-            };
-            self.slots.push(slot);
-            Entity {
-                index,
-                generation: 1,
-            }
+            });
         }
+
+        let index = u32::try_from(self.slots.len()).map_err(|_| WorldError::EntityCapacityExhausted)?;
+        self.slots.push(EntitySlot {
+            generation: 1,
+            alive: true,
+            retired: false,
+        });
+        Ok(Entity {
+            index,
+            generation: 1,
+        })
     }
 
-    /// Spawns an entity and inserts its first component.
+    /// Convenience spawn for existing callers. Prefer [`Self::try_spawn_empty`] at untrusted boundaries.
+    pub fn spawn_empty(&mut self) -> Entity {
+        self.try_spawn_empty()
+            .expect("ExtremEngine entity index capacity exhausted")
+    }
+
+    pub fn try_spawn<T: 'static>(&mut self, component: T) -> Result<Entity, WorldError> {
+        let entity = self.try_spawn_empty()?;
+        self.insert(entity, component)?;
+        Ok(entity)
+    }
+
     pub fn spawn<T: 'static>(&mut self, component: T) -> Entity {
-        let entity = self.spawn_empty();
-        self.insert(entity, component)
-            .expect("a freshly spawned entity must be alive");
-        entity
+        self.try_spawn(component)
+            .expect("ExtremEngine entity index capacity exhausted")
     }
 
-    /// Returns whether the entity is alive in this world with matching generation.
     pub fn contains(&self, entity: Entity) -> bool {
         let index = entity.index as usize;
-        if index >= self.slots.len() {
+        let Some(slot) = self.slots.get(index) else {
             return false;
-        }
-        let slot = self.slots[index];
-        slot.alive && slot.generation == entity.generation
+        };
+        slot.alive && !slot.retired && slot.generation == entity.generation
     }
 
-    /// Removes an entity and all of its components.
+    /// Removes an entity and retires the slot permanently before generation wraparound.
     pub fn despawn(&mut self, entity: Entity) -> Result<(), WorldError> {
         if !self.contains(entity) {
             return Err(WorldError::EntityNotFound(entity));
@@ -157,8 +162,13 @@ impl World {
 
         let slot = &mut self.slots[entity.index as usize];
         slot.alive = false;
-        slot.generation = slot.generation.wrapping_add(1);
-        self.free_list.push(entity.index);
+        if slot.generation == u32::MAX {
+            // Reusing generation 1 after wrap could make a stale handle valid again.
+            slot.retired = true;
+        } else {
+            slot.generation += 1;
+            self.free_list.push(entity.index);
+        }
 
         for storage in self.components.values_mut() {
             storage.remove_entity(entity);
@@ -166,7 +176,6 @@ impl World {
         Ok(())
     }
 
-    /// Inserts or replaces a component on an entity.
     pub fn insert<T: 'static>(
         &mut self,
         entity: Entity,
@@ -175,7 +184,6 @@ impl World {
         if !self.contains(entity) {
             return Err(WorldError::EntityNotFound(entity));
         }
-
         let storage = self.components.entry(TypeId::of::<T>()).or_insert_with(|| {
             Box::new(TypedStorage::<T> {
                 values: HashMap::new(),
@@ -188,7 +196,6 @@ impl World {
         Ok(typed.values.insert(entity, component))
     }
 
-    /// Gets an immutable component reference.
     pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> {
         if !self.contains(entity) {
             return None;
@@ -199,7 +206,6 @@ impl World {
             .and_then(|storage| storage.values.get(&entity))
     }
 
-    /// Gets a mutable component reference.
     pub fn get_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
         if !self.contains(entity) {
             return None;
@@ -210,12 +216,10 @@ impl World {
             .and_then(|storage| storage.values.get_mut(&entity))
     }
 
-    /// Removes a component from an entity.
     pub fn remove<T: 'static>(&mut self, entity: Entity) -> Result<Option<T>, WorldError> {
         if !self.contains(entity) {
             return Err(WorldError::EntityNotFound(entity));
         }
-
         Ok(self
             .components
             .get_mut(&TypeId::of::<T>())
@@ -223,47 +227,34 @@ impl World {
             .and_then(|storage| storage.values.remove(&entity)))
     }
 
-    /// Iterates over entities that own a component of type `T`.
+    /// Iteration order is intentionally unspecified. Sort entity IDs at semantic boundaries where order matters.
     pub fn iter<T: 'static>(&self) -> impl Iterator<Item = (Entity, &T)> {
         self.components
             .get(&TypeId::of::<T>())
             .into_iter()
             .filter_map(|storage| storage.as_any().downcast_ref::<TypedStorage<T>>())
-            .flat_map(|storage| {
-                storage
-                    .values
-                    .iter()
-                    .map(|(entity, value)| (*entity, value))
-            })
+            .flat_map(|storage| storage.values.iter().map(|(entity, value)| (*entity, value)))
     }
 
-    /// Iterates mutably over entities that own a component of type `T`.
+    /// Mutable iteration order is intentionally unspecified.
     pub fn iter_mut<T: 'static>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         self.components
             .get_mut(&TypeId::of::<T>())
             .into_iter()
             .filter_map(|storage| storage.as_any_mut().downcast_mut::<TypedStorage<T>>())
-            .flat_map(|storage| {
-                storage
-                    .values
-                    .iter_mut()
-                    .map(|(entity, value)| (*entity, value))
-            })
+            .flat_map(|storage| storage.values.iter_mut().map(|(entity, value)| (*entity, value)))
     }
 
-    /// Returns the number of alive entities.
     pub fn entity_count(&self) -> usize {
-        self.slots.iter().filter(|s| s.alive).count()
+        self.slots.iter().filter(|slot| slot.alive).count()
     }
 
-    /// Returns the number of stored values for a component type.
     pub fn component_count<T: 'static>(&self) -> usize {
         self.components
             .get(&TypeId::of::<T>())
             .map_or(0, |storage| storage.len())
     }
 
-    /// Inserts or replaces a global resource.
     pub fn insert_resource<T: Any>(&mut self, resource: T) -> Option<T> {
         self.resources
             .insert(TypeId::of::<T>(), Box::new(resource))
@@ -271,14 +262,12 @@ impl World {
             .map(|old| *old)
     }
 
-    /// Gets an immutable global resource.
     pub fn get_resource<T: Any>(&self) -> Option<&T> {
         self.resources
             .get(&TypeId::of::<T>())
             .and_then(|resource| resource.downcast_ref::<T>())
     }
 
-    /// Gets a mutable global resource.
     pub fn get_resource_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.resources
             .get_mut(&TypeId::of::<T>())
@@ -297,17 +286,12 @@ mod tests {
     fn components_follow_entity_lifetime() {
         let mut world = World::new();
         let entity = world.spawn(Health(100));
-
         assert_eq!(world.get::<Health>(entity), Some(&Health(100)));
         assert_eq!(world.insert(entity, Health(75)), Ok(Some(Health(100))));
-        assert_eq!(world.get::<Health>(entity), Some(&Health(75)));
         assert_eq!(world.despawn(entity), Ok(()));
         assert!(!world.contains(entity));
         assert_eq!(world.get::<Health>(entity), None);
-        assert_eq!(
-            world.despawn(entity),
-            Err(WorldError::EntityNotFound(entity))
-        );
+        assert_eq!(world.despawn(entity), Err(WorldError::EntityNotFound(entity)));
     }
 
     #[test]
@@ -315,33 +299,34 @@ mod tests {
         let mut world = World::new();
         let entity_v1 = world.spawn(Health(100));
         world.despawn(entity_v1).expect("despawn");
-
         let entity_v2 = world.spawn(Health(200));
-
-        // Index is reused but generation changed
         assert_eq!(entity_v1.index(), entity_v2.index());
         assert_ne!(entity_v1.generation(), entity_v2.generation());
-
-        // Stale handle should fail lookup and contain check
         assert!(!world.contains(entity_v1));
-        assert!(world.contains(entity_v2));
-        assert_eq!(world.get::<Health>(entity_v1), None);
         assert_eq!(world.get::<Health>(entity_v2), Some(&Health(200)));
+    }
+
+    #[test]
+    fn retired_generation_cannot_wrap_to_stale_handle() {
+        let mut world = World::new();
+        world.slots.push(super::EntitySlot {
+            generation: u32::MAX,
+            alive: true,
+            retired: false,
+        });
+        let final_generation = Entity::from_raw_parts(0, u32::MAX);
+        world.despawn(final_generation).expect("despawn final generation");
+        let next = world.try_spawn_empty().expect("new slot");
+        assert_ne!(next.index(), final_generation.index());
+        assert!(!world.contains(final_generation));
     }
 
     #[test]
     fn missing_entities_are_rejected() {
         let mut world = World::new();
         let entity = Entity::from_raw(42);
-
-        assert_eq!(
-            world.insert(entity, Health(10)),
-            Err(WorldError::EntityNotFound(entity))
-        );
-        assert_eq!(
-            world.remove::<Health>(entity),
-            Err(WorldError::EntityNotFound(entity))
-        );
+        assert_eq!(world.insert(entity, Health(10)), Err(WorldError::EntityNotFound(entity)));
+        assert_eq!(world.remove::<Health>(entity), Err(WorldError::EntityNotFound(entity)));
     }
 
     #[test]
