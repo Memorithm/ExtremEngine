@@ -5,11 +5,17 @@ use std::hash::Hash;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum KeyCode {
     A,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    Control,
     D,
     E,
     Escape,
     Q,
     S,
+    Shift,
     Space,
     W,
     Unknown(u32),
@@ -88,13 +94,18 @@ pub struct MouseState {
 
 impl MouseState {
     pub fn move_to(&mut self, x: f32, y: f32) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
         self.delta.0 += x - self.position.0;
         self.delta.1 += y - self.position.1;
         self.position = (x, y);
     }
 
     pub fn scroll(&mut self, amount: f32) {
-        self.wheel += amount;
+        if amount.is_finite() {
+            self.wheel += amount;
+        }
     }
 
     pub fn end_frame(&mut self) {
@@ -134,5 +145,14 @@ mod tests {
         assert!(!input.keys.just_pressed(KeyCode::Space));
         input.keys.release(KeyCode::Space);
         assert!(input.keys.just_released(KeyCode::Space));
+    }
+
+    #[test]
+    fn non_finite_mouse_motion_is_ignored() {
+        let mut input = Input::default();
+        input.mouse.move_to(f32::NAN, 10.0);
+        assert_eq!(input.mouse.position, (0.0, 0.0));
+        input.mouse.scroll(f32::INFINITY);
+        assert_eq!(input.mouse.wheel, 0.0);
     }
 }
