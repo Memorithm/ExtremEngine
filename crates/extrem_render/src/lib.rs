@@ -1,5 +1,7 @@
 use extrem_ecs::Entity;
+use extrem_gpu::{GpuContext, GpuError, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
 use extrem_math::{Mat4, Vec3};
+use extrem_mesh::MeshData;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -365,5 +367,395 @@ mod tests {
         let stats = renderer.end_frame();
         assert_eq!(stats.submitted_commands, 1);
         assert!(stats.drawn_pixels > 0);
+    }
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MeshUniforms {
+    view_projection: [f32; 16],
+    model: [f32; 16],
+    color: [f32; 4],
+}
+
+#[derive(Debug)]
+pub enum MeshRenderError {
+    Gpu(GpuError),
+    InvalidMesh(String),
+}
+
+impl fmt::Display for MeshRenderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Gpu(error) => write!(formatter, "GPU error: {error}"),
+            Self::InvalidMesh(message) => write!(formatter, "invalid mesh: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for MeshRenderError {}
+
+impl From<GpuError> for MeshRenderError {
+    fn from(error: GpuError) -> Self {
+        Self::Gpu(error)
+    }
+}
+
+const MESH_SHADER: &str = r#"
+struct Uniforms {
+    view_projection: mat4x4f,
+    model: mat4x4f,
+    color: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexInput {
+    @location(0) position: vec3f,
+    @location(1) normal: vec3f,
+    @location(2) uv: vec2f,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    let world_position = uniforms.model * vec4f(input.position, 1.0);
+    output.position = uniforms.view_projection * world_position;
+    let light_dir = normalize(vec3f(0.5, 1.0, 0.3));
+    let diffuse = max(dot(normalize(input.normal), light_dir), 0.0);
+    let ambient = 0.3;
+    let lighting = ambient + diffuse * 0.7;
+    output.color = vec4f(uniforms.color.rgb * lighting, uniforms.color.a);
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    return input.color;
+}
+"#;
+
+pub struct MeshRenderer {
+    context: GpuContext,
+    surface: SurfaceTarget,
+    pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+impl MeshRenderer {
+    pub fn new(
+        context: GpuContext,
+        surface: SurfaceTarget,
+        mesh: &MeshData,
+    ) -> Result<Self, MeshRenderError> {
+        let device = context.device();
+        let format = surface.format();
+        let width = surface.width();
+        let height = surface.height();
+
+        let vertex_data: &[u8] = bytemuck::cast_slice(&mesh.vertices);
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh vertex buffer"),
+            size: vertex_data.len() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        context.queue().write_buffer(&vertex_buffer, 0, vertex_data);
+
+        let index_data: &[u8] = bytemuck::cast_slice(&mesh.indices);
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh index buffer"),
+            size: index_data.len() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX,
+            mapped_at_creation: false,
+        });
+        context.queue().write_buffer(&index_buffer, 0, index_data);
+
+        let index_count = mesh.index_count();
+
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh uniform buffer"),
+            size: std::mem::size_of::<MeshUniforms>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mesh bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mesh bind group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mesh pipeline layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mesh shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(MESH_SHADER)),
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh render pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 32,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                    ],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
+
+        Ok(Self {
+            context,
+            surface,
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            index_count,
+            uniform_buffer,
+            bind_group,
+            depth_texture,
+            depth_view,
+            width,
+            height,
+        })
+    }
+
+    fn create_depth_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mesh depth texture"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        let resized = self.surface.resize(self.context.device(), width, height);
+        if resized {
+            self.width = width;
+            self.height = height;
+            let (depth_texture, depth_view) =
+                Self::create_depth_texture(self.context.device(), width, height);
+            self.depth_texture = depth_texture;
+            self.depth_view = depth_view;
+        }
+        resized
+    }
+
+    pub fn draw_mesh(
+        &self,
+        view_projection: Mat4,
+        model: Mat4,
+        color: [f32; 4],
+    ) -> Result<(), MeshRenderError> {
+        let uniforms = MeshUniforms {
+            view_projection: view_projection.data,
+            model: model.data,
+            color,
+        };
+        self.context.queue().write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[uniforms]),
+        );
+
+        let frame = self.surface.acquire_frame();
+        let (texture, status) = match frame {
+            SurfaceFrame::Renderable { texture, status } => (texture, status),
+            SurfaceFrame::Unavailable(_) => return Ok(()),
+        };
+
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder =
+            self.context
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("mesh draw encoder"),
+                });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mesh render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.025,
+                            g: 0.035,
+                            b: 0.055,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+
+        self.context.queue().submit(Some(encoder.finish()));
+        self.context.queue().present(texture);
+
+        if status == SurfaceFrameStatus::Suboptimal {
+            self.surface.reconfigure(self.context.device());
+        }
+
+        Ok(())
+    }
+
+    pub fn context(&self) -> &GpuContext {
+        &self.context
+    }
+
+    pub fn surface(&self) -> &SurfaceTarget {
+        &self.surface
+    }
+}
+
+impl RenderBackend for MeshRenderer {
+    fn begin_frame(&mut self, _info: FrameInfo) {}
+
+    fn submit(&mut self, _command: RenderCommand) {}
+
+    fn end_frame(&mut self) -> FrameStats {
+        FrameStats {
+            submitted_commands: 0,
+            drawn_pixels: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod mesh_tests {
+    use super::*;
+    use extrem_mesh::unit_cube;
+
+    #[test]
+    fn mesh_uniforms_size_matches_shader() {
+        let size = std::mem::size_of::<MeshUniforms>();
+        assert_eq!(size, 144);
+    }
+
+    #[test]
+    fn mesh_renderer_compiles_with_unit_cube() {
+        let _mesh = unit_cube();
+        assert_eq!(_mesh.vertex_count(), 24);
+        assert_eq!(_mesh.index_count(), 36);
     }
 }

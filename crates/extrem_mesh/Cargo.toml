@@ -1,18 +1,15 @@
 [package]
-name = "extrem_render"
+name = "extrem_mesh"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Replaceable rendering contracts for ExtremEngine"
+description = "Mesh types and vertex layouts for ExtremEngine"
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
-extrem_ecs = { path = "../extrem_ecs" }
-extrem_gpu = { path = "../extrem_gpu" }
 extrem_math = { path = "../extrem_math" }
-extrem_mesh = { path = "../extrem_mesh" }
-wgpu = "30"
+extrem_ecs = { path = "../extrem_ecs" }
 
 [lints]
 workspace = true
