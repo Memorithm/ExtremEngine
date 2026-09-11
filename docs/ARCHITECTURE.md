@@ -9,7 +9,7 @@ ExtremEngine is a modular Rust game-engine project under active construction. It
 - `extrem_scene`: validated Parent/Children graph, transform propagation, camera and versioned RON scene document.
 - `extrem_editor`: command transactions, undo/redo and inspector snapshots.
 - `extrem_assets`: validated virtual asset keys, typed handles and collision-safe path identity.
-- `extrem_app`: startup/fixed/update/post-update/render stages and bounded fixed-step accumulation.
+- `extrem_app`: startup/fixed/update/post-update/render stages, bounded fixed-step accumulation, frame-budget accounting, deterministic LOD and DRS controllers.
 - `extrem_input`: platform-neutral keyboard/mouse state.
 - `extrem_window`: `winit` host that feeds native events into `Input` before frame callbacks.
 - `extrem_gpu`: WGPU context, presentable surface management and a validation-triangle presenter.
@@ -18,7 +18,7 @@ ExtremEngine is a modular Rust game-engine project under active construction. It
 - `extrem_physics`: deliberately minimal gravity/ground/box reference simulation with numeric validation; not a general rigid-body solver.
 - `extrem_science`: validated Euler/RK4 ODE helpers and reusable integration workspace.
 - `extrem_audio`: audio command/backend contract plus null backend; production output is deferred.
-- `extrem_engine`: integration facade, persistent graph, deterministic extraction ordering and `WgpuRenderer` adapter for the low-level validation presenter.
+- `extrem_engine`: integration facade, persistent graph, deterministic extraction ordering, visibility-aware command extraction, CPU frame-budget/DRS sampling and `WgpuRenderer` adapter for the low-level validation presenter.
 
 ## Current invariants
 
