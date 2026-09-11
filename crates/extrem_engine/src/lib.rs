@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
 use extrem_math::Transform;
@@ -8,6 +6,12 @@ use extrem_render::{
 };
 use extrem_scene::propagate_transforms;
 
+mod extract;
+
+pub use extract::{extract_transforms, select_camera};
+pub use extrem_app::frame;
+pub use extrem_app::lod;
+pub use extrem_app::quality;
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
@@ -17,8 +21,8 @@ pub use extrem_gpu::{GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, Wg
 pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
-    Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
-    SceneFormatError, SceneNode, Velocity, Visibility,
+    Camera, CameraPriority, Children, GlobalTransform, Name, Parent, Projection, Scene,
+    SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility, is_hierarchically_visible,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
@@ -214,66 +218,16 @@ impl<R: RenderBackend> Engine<R> {
             .filter_map(|pass| self.render_graph.pass_name(*pass).map(str::to_owned))
             .collect();
 
-        // ECS storage iteration is deliberately unspecified. Lowest entity ID is the explicit,
-        // deterministic tie-break until a dedicated camera priority component is introduced.
-        let active_camera = self
-            .world()
-            .iter::<Camera>()
-            .filter(|(_, camera)| camera.active)
-            .filter_map(|(entity, camera)| {
-                let transform = self
-                    .world()
-                    .get::<GlobalTransform>(entity)
-                    .map(|global| global.0)
-                    .or_else(|| self.world().get::<Transform>(entity).copied())?;
-                Some((
-                    entity,
-                    camera.view_projection(transform, self.config.viewport_aspect),
-                ))
-            })
-            .min_by_key(|(entity, _)| *entity);
-
-        if let Some((entity, view_projection)) = active_camera {
+        if let Some((entity, view_projection)) =
+            extract::select_camera(self.world(), self.config.viewport_aspect)
+        {
             self.renderer.submit(RenderCommand::SetCamera {
                 entity,
                 view_projection,
             });
         }
 
-        let global_entities: HashSet<_> = self
-            .world()
-            .iter::<GlobalTransform>()
-            .map(|(entity, _)| entity)
-            .collect();
-        let mut commands: Vec<_> = self
-            .world()
-            .iter::<GlobalTransform>()
-            .map(|(entity, transform)| {
-                (
-                    entity,
-                    RenderCommand::Transform {
-                        entity,
-                        translation: transform.0.translation,
-                    },
-                )
-            })
-            .collect();
-        commands.extend(
-            self.world()
-                .iter::<Transform>()
-                .filter(|(entity, _)| !global_entities.contains(entity))
-                .map(|(entity, transform)| {
-                    (
-                        entity,
-                        RenderCommand::Transform {
-                            entity,
-                            translation: transform.translation,
-                        },
-                    )
-                }),
-        );
-        commands.sort_by_key(|(entity, _)| *entity);
-        for (_, command) in commands {
+        for command in extract::extract_transforms(self.world()) {
             self.renderer.submit(command);
         }
 
@@ -301,7 +255,7 @@ impl<R: RenderBackend> Engine<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Camera, Engine, Input, KeyCode, Stage};
+    use super::{Camera, CameraPriority, Engine, Input, KeyCode, Stage, Visibility};
     use extrem_math::{Transform, Vec3};
     use extrem_scene::Velocity;
 
@@ -399,6 +353,41 @@ mod tests {
             .world_mut()
             .insert(first, Camera::default())
             .expect("camera");
+        engine.tick(1.0 / 60.0);
+        assert!(first < second);
+        assert_eq!(engine.last_frame_stats().submitted_commands, 3);
+    }
+
+    #[test]
+    fn hidden_entity_is_not_submitted() {
+        let mut engine = Engine::new();
+        let _visible = engine.world_mut().spawn(Transform::IDENTITY);
+        let hidden = engine.world_mut().spawn(Transform::IDENTITY);
+        engine
+            .world_mut()
+            .insert(hidden, Visibility(false))
+            .expect("visibility");
+        engine.tick(1.0 / 60.0);
+        assert_eq!(engine.last_frame_stats().submitted_commands, 1);
+    }
+
+    #[test]
+    fn camera_priority_overrides_entity_order() {
+        let mut engine = Engine::new();
+        let first = engine.world_mut().spawn(Transform::IDENTITY);
+        let second = engine.world_mut().spawn(Transform::IDENTITY);
+        engine
+            .world_mut()
+            .insert(first, Camera::default())
+            .expect("camera");
+        engine
+            .world_mut()
+            .insert(second, Camera::default())
+            .expect("camera");
+        engine
+            .world_mut()
+            .insert(second, CameraPriority(5))
+            .expect("priority");
         engine.tick(1.0 / 60.0);
         assert!(first < second);
         assert_eq!(engine.last_frame_stats().submitted_commands, 3);
