@@ -1,4 +1,5 @@
 pub mod frame;
+pub mod quality;
 
 use extrem_ecs::{World, WorldError};
 
@@ -158,7 +159,6 @@ impl App {
         if fixed_delta_seconds.is_finite() && fixed_delta_seconds > 0.0 {
             self.fixed_delta_seconds = fixed_delta_seconds;
             self.time.fixed_delta_seconds = fixed_delta_seconds;
-            // Keep an old accumulator valid after a timestep reconfiguration.
             self.fixed_accumulator = self.fixed_accumulator.rem_euclid(fixed_delta_seconds);
         }
         self
@@ -186,8 +186,7 @@ impl App {
     }
 
     pub fn update(&mut self, delta_seconds: f32) -> UpdateReport {
-        self.time
-            .advance_frame(delta_seconds, self.fixed_delta_seconds);
+        self.time.advance_frame(delta_seconds, self.fixed_delta_seconds);
         self.fixed_accumulator += self.time.delta_seconds;
         if !self.fixed_accumulator.is_finite() {
             self.fixed_accumulator = 0.0;
@@ -214,7 +213,6 @@ impl App {
 
         let fixed_debt_dropped = self.fixed_accumulator >= self.fixed_delta_seconds;
         if fixed_debt_dropped {
-            // Drop only whole overdue steps; preserve interpolation-relevant sub-step residue.
             self.fixed_accumulator = self.fixed_accumulator.rem_euclid(self.fixed_delta_seconds);
         }
 
