@@ -163,9 +163,16 @@ mod tests {
     fn promotion_requires_hysteresis_and_moves_one_level() {
         let mut selector = LodSelector::new(LodConfig::default(), 2).unwrap();
         for _ in 0..2 {
-            assert!(!selector.observe(observation(0.05, 10.0, 0.2, true)).unwrap().changed);
+            assert!(
+                !selector
+                    .observe(observation(0.05, 10.0, 0.2, true))
+                    .unwrap()
+                    .changed
+            );
         }
-        let decision = selector.observe(observation(0.05, 10.0, 0.2, true)).unwrap();
+        let decision = selector
+            .observe(observation(0.05, 10.0, 0.2, true))
+            .unwrap();
         assert_eq!(decision.next_level, 1);
     }
 
@@ -181,10 +188,18 @@ mod tests {
     #[test]
     fn neutral_band_resets_streaks() {
         let mut selector = LodSelector::new(LodConfig::default(), 2).unwrap();
-        selector.observe(observation(0.05, 10.0, 0.2, true)).unwrap();
-        selector.observe(observation(0.02, 10.0, 0.2, true)).unwrap();
-        selector.observe(observation(0.05, 10.0, 0.2, true)).unwrap();
-        selector.observe(observation(0.05, 10.0, 0.2, true)).unwrap();
+        selector
+            .observe(observation(0.05, 10.0, 0.2, true))
+            .unwrap();
+        selector
+            .observe(observation(0.02, 10.0, 0.2, true))
+            .unwrap();
+        selector
+            .observe(observation(0.05, 10.0, 0.2, true))
+            .unwrap();
+        selector
+            .observe(observation(0.05, 10.0, 0.2, true))
+            .unwrap();
         assert_eq!(selector.level(), 2);
     }
 
@@ -198,7 +213,9 @@ mod tests {
         finest.observe(observation(0.1, 1.0, 1.0, true)).unwrap();
         assert_eq!(finest.level(), 0);
         let mut coarsest = LodSelector::new(config, config.max_level).unwrap();
-        coarsest.observe(observation(0.0, 1_000.0, 0.0, false)).unwrap();
+        coarsest
+            .observe(observation(0.0, 1_000.0, 0.0, false))
+            .unwrap();
         assert_eq!(coarsest.level(), config.max_level);
     }
 
