@@ -500,6 +500,15 @@ name = "extrem_science"
 version = "0.1.0"
 
 [[package]]
+name = "extrem_web"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "extrem_window"
 version = "0.1.0"
 dependencies = [
