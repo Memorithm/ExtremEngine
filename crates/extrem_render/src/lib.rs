@@ -220,7 +220,7 @@ impl CpuRenderer {
     }
 
     fn clear(&mut self) {
-        for pixel in self.pixels.chunks_exact_mut(3) {
+        for pixel in self.pixels.as_chunks_mut::<3>().0 {
             pixel.copy_from_slice(&[18, 22, 30]);
         }
     }
