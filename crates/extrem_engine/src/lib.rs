@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
 use extrem_math::Transform;
@@ -7,8 +9,10 @@ use extrem_render::{
 use extrem_scene::propagate_transforms;
 
 mod extract;
+mod quality_loop;
 
 pub use extract::{extract_transforms, select_camera};
+pub use quality_loop::QualityLoop;
 pub use extrem_app::frame;
 pub use extrem_app::lod;
 pub use extrem_app::quality;
@@ -19,10 +23,12 @@ pub use extrem_ecs::{Entity, WorldError};
 pub use extrem_editor::{EditorCommand, EditorError, EditorState, InspectorSnapshot};
 pub use extrem_gpu::{GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, WgpuPresenter};
 pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
-pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
+pub use extrem_physics::{
+    BodyType, BoxCollider, Gravity, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
+};
 pub use extrem_scene::{
-    Camera, CameraPriority, Children, GlobalTransform, Name, Parent, Projection, Scene,
-    SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility, is_hierarchically_visible,
+    is_hierarchically_visible, Camera, CameraPriority, Children, GlobalTransform, Name, Parent,
+    Projection, Scene, SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
@@ -110,6 +116,7 @@ pub struct Engine<R: RenderBackend = NullRenderer> {
     render_graph: RenderGraph,
     last_frame_stats: FrameStats,
     last_render_passes: Vec<String>,
+    quality: QualityLoop,
 }
 
 impl Engine<NullRenderer> {
@@ -157,6 +164,7 @@ impl<R: RenderBackend> Engine<R> {
             render_graph: default_render_graph(),
             last_frame_stats: FrameStats::default(),
             last_render_passes: Vec::new(),
+            quality: QualityLoop::from_target_delta(config.target_delta_seconds),
         }
     }
 
@@ -196,12 +204,21 @@ impl<R: RenderBackend> Engine<R> {
         &mut self.render_graph
     }
 
+    pub fn quality(&self) -> QualityLoop {
+        self.quality
+    }
+
+    pub fn resolution_scale(&self) -> f32 {
+        self.quality.scale()
+    }
+
     /// Copies the current native input snapshot into the ECS before a frame update.
     pub fn set_input_snapshot(&mut self, input: &Input) {
         self.world_mut().insert_resource(input.clone());
     }
 
     pub fn tick(&mut self, delta_seconds: f32) -> UpdateReport {
+        let started = Instant::now();
         let report = self.app.update(delta_seconds);
         self.renderer.begin_frame(FrameInfo {
             index: report.frame,
@@ -235,6 +252,7 @@ impl<R: RenderBackend> Engine<R> {
         if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
             input.end_frame();
         }
+        self.quality.observe_cpu(started.elapsed());
         report
     }
 
@@ -289,6 +307,7 @@ mod tests {
             .translation;
         assert!((position.x - 2.0 / 60.0).abs() < 0.000_01);
         assert_eq!(engine.last_frame_stats().submitted_commands, 1);
+        assert!(engine.quality().stats().count() >= 2);
     }
 
     #[test]
