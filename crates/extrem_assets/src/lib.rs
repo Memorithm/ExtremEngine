@@ -247,6 +247,12 @@ impl<T> Assets<T> {
             .map(|entry| &mut entry.value)
     }
 
+    pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
+        let entry = self.entries.remove(&handle.id)?;
+        self.paths.remove(&entry.key);
+        Some(entry.value)
+    }
+
     pub fn state(&self, handle: Handle<T>) -> AssetState {
         self.entries
             .get(&handle.id)
@@ -326,6 +332,18 @@ mod tests {
         assert_eq!(assets.len(), 1);
         assert_eq!(assets.get(first), Some(&"textures/hero.txt".to_owned()));
         assert_eq!(AssetId::from_path("A\\B"), AssetId::from_path("a/b"));
+    }
+
+    #[test]
+    fn remove_drops_value_and_frees_the_path() {
+        let mut assets = Assets::<String>::new();
+        let handle = assets.insert("meshes/hero.bin", "mesh".to_owned()).expect("insert");
+        assert_eq!(assets.remove(handle), Some("mesh".to_owned()));
+        assert!(assets.is_empty());
+        let again = assets
+            .insert("meshes/hero.bin", "mesh-2".to_owned())
+            .expect("reinsert");
+        assert_eq!(assets.get(again), Some(&"mesh-2".to_owned()));
     }
 
     #[test]
