@@ -200,6 +200,9 @@ mod tests {
             down_threshold: 1.0,
             ..DrsConfig::default()
         };
-        assert_eq!(DrsController::new(config, 1.0), Err(DrsError::InvalidConfig));
+        assert_eq!(
+            DrsController::new(config, 1.0),
+            Err(DrsError::InvalidConfig)
+        );
     }
 }
