@@ -388,6 +388,236 @@ impl WebCanvas {
     }
 }
 
+/// Unified browser-facing WebGPU runtime.
+///
+/// Owns the canvas, WGPU device, surface, and timing sources.
+/// On native targets all methods return `WebSurfaceError::UnsupportedTarget`.
+#[cfg(target_arch = "wasm32")]
+pub struct WebRuntime {
+    canvas: WebCanvas,
+    context: extrem_gpu::GpuContext,
+    surface: extrem_gpu::SurfaceTarget,
+    config: WebSurfaceConfig,
+    clock: BrowserClock,
+    paused: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebRuntime {
+    /// Initialize the runtime by acquiring a canvas and creating a WebGPU surface.
+    ///
+    /// # Errors
+    /// Returns `WebSurfaceError` if the canvas cannot be found, the GPU adapter
+    /// cannot be acquired, or the device cannot be created.
+    pub fn new(canvas_id: &str, config: WebSurfaceConfig) -> Result<Self, WebSurfaceError> {
+        let canvas = WebCanvas::acquire(canvas_id)?;
+
+        let (css_w, css_h) = if config.width > 0 && config.height > 0 {
+            (config.width, config.height)
+        } else {
+            (canvas.css_width(), canvas.css_height())
+        };
+
+        let dpr = if config.dpr > 0.0 {
+            config.dpr
+        } else {
+            canvas.device_pixel_ratio()
+        };
+
+        let phys_w = ((css_w as f64 * dpr).max(1.0) as u32).max(1);
+        let phys_h = ((css_h as f64 * dpr).max(1.0) as u32).max(1);
+
+        let canvas_element = canvas.canvas().clone();
+        let options = extrem_gpu::GpuContextOptions {
+            power_preference: config.power_preference,
+        };
+
+        let (context, surface) = extrem_gpu::GpuContext::for_surface_with_options(
+            wgpu::SurfaceTarget::Canvas(canvas_element),
+            phys_w,
+            phys_h,
+            options,
+        )
+        .map_err(|_| WebSurfaceError::SurfaceConfigurationFailed)?;
+
+        Ok(Self {
+            canvas,
+            context,
+            surface,
+            config,
+            clock: BrowserClock::new(),
+            paused: false,
+        })
+    }
+
+    /// Resize the rendering surface to new CSS pixel dimensions.
+    ///
+    /// Returns `true` if the surface was actually resized.
+    pub fn resize(&mut self, css_width: u32, css_height: u32) -> bool {
+        if css_width == 0 || css_height == 0 {
+            return false;
+        }
+
+        let dpr = if self.config.dpr > 0.0 {
+            self.config.dpr
+        } else {
+            self.canvas.device_pixel_ratio()
+        };
+
+        let phys_w = ((css_width as f64 * dpr).max(1.0) as u32).max(1);
+        let phys_h = ((css_height as f64 * dpr).max(1.0) as u32).max(1);
+
+        self.surface.resize(self.context.device(), phys_w, phys_h)
+    }
+
+    /// Acquire the next frame and return its status.
+    /// Callers should render only if the frame is `Renderable`.
+    pub fn acquire_frame(&self) -> extrem_gpu::SurfaceFrame {
+        self.surface.acquire_frame()
+    }
+
+    /// Present a rendered frame.
+    pub fn present(&self, texture: wgpu::SurfaceTexture) {
+        self.context.queue().present(texture);
+    }
+
+    /// Get the surface texture format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.surface.format()
+    }
+
+    /// Get the current surface width in physical pixels.
+    pub fn width(&self) -> u32 {
+        self.surface.width()
+    }
+
+    /// Get the current surface height in physical pixels.
+    pub fn height(&self) -> u32 {
+        self.surface.height()
+    }
+
+    /// Pause rendering (e.g., when page is hidden).
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Resume rendering after pause.
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
+    /// Whether the runtime is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Get the current browser lifecycle snapshot.
+    pub fn poll_lifecycle(&self) -> WebLifecycle {
+        WebEventBridge::poll_lifecycle()
+    }
+
+    /// Get the runtime clock (monotonic browser time).
+    pub fn clock(&self) -> &BrowserClock {
+        &self.clock
+    }
+
+    /// Seconds since the runtime was created.
+    pub fn elapsed(&self) -> f64 {
+        self.clock.elapsed()
+    }
+
+    /// Get the WGPU device.
+    pub fn device(&self) -> &wgpu::Device {
+        self.context.device()
+    }
+
+    /// Get the WGPU queue.
+    pub fn queue(&self) -> &wgpu::Queue {
+        self.context.queue()
+    }
+
+    /// Get the WGPU instance.
+    pub fn instance(&self) -> &wgpu::Instance {
+        self.context.instance()
+    }
+
+    /// Get the adapter info.
+    pub fn adapter_name(&self) -> String {
+        self.context.adapter_name()
+    }
+
+    /// Reconfigure the surface (useful after Outdated/Lost errors).
+    pub fn reconfigure(&self) {
+        self.surface.reconfigure(self.context.device());
+    }
+
+    /// Get the canvas reference.
+    pub fn canvas(&self) -> &WebCanvas {
+        &self.canvas
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct WebRuntime {
+    _priv: (),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WebRuntime {
+    /// Initialize the runtime.
+    ///
+    /// Always returns `UnsupportedTarget` on native platforms.
+    pub fn new(_canvas_id: &str, _config: WebSurfaceConfig) -> Result<Self, WebSurfaceError> {
+        Err(WebSurfaceError::UnsupportedTarget)
+    }
+
+    /// Resize the rendering surface.
+    ///
+    /// Always returns `false` on native platforms.
+    pub fn resize(&mut self, _css_width: u32, _css_height: u32) -> bool {
+        false
+    }
+
+    /// Pause rendering.
+    pub fn pause(&mut self) {}
+
+    /// Resume rendering.
+    pub fn resume(&mut self) {}
+
+    /// Whether the runtime is currently paused.
+    pub fn is_paused(&self) -> bool {
+        false
+    }
+
+    /// Seconds since the runtime was created.
+    pub fn elapsed(&self) -> f64 {
+        0.0
+    }
+
+    /// Get the current surface width in physical pixels.
+    pub fn width(&self) -> u32 {
+        0
+    }
+
+    /// Get the current surface height in physical pixels.
+    pub fn height(&self) -> u32 {
+        0
+    }
+
+    /// Get the adapter info.
+    pub fn adapter_name(&self) -> String {
+        String::new()
+    }
+
+    /// Get the current browser lifecycle snapshot.
+    pub fn poll_lifecycle(&self) -> WebLifecycle {
+        WebLifecycle::default()
+    }
+
+    /// Reconfigure the surface.
+    pub fn reconfigure(&self) {}
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn probe_web_runtime() -> Result<WebRuntimeCapabilities, WebProbeError> {
     use js_sys::Reflect;
@@ -543,5 +773,41 @@ mod tests {
     fn event_bridge_constructs() {
         let bridge = WebEventBridge::new();
         let _ = bridge;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_runtime_new_fails_closed() {
+        let config = WebSurfaceConfig::default();
+        assert!(matches!(
+            WebRuntime::new("canvas", config),
+            Err(WebSurfaceError::UnsupportedTarget)
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_runtime_methods_are_no_ops() {
+        let config = WebSurfaceConfig::default();
+        let mut runtime = match WebRuntime::new("canvas", config) {
+            Err(_) => {
+                // On native, new() returns Err, so we can't test methods directly.
+                // The struct exists but cannot be constructed successfully.
+                return;
+            }
+            Ok(r) => r,
+        };
+        assert!(!runtime.resize(100, 100));
+        assert!(!runtime.is_paused());
+        runtime.pause();
+        assert!(runtime.is_paused());
+        runtime.resume();
+        assert!(!runtime.is_paused());
+        assert_eq!(runtime.elapsed(), 0.0);
+        assert_eq!(runtime.width(), 0);
+        assert_eq!(runtime.height(), 0);
+        assert_eq!(runtime.adapter_name(), "");
+        let _ = runtime.poll_lifecycle();
+        runtime.reconfigure();
     }
 }

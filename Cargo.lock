@@ -504,6 +504,7 @@ version = "0.1.0"
 name = "extrem_web"
 version = "0.1.0"
 dependencies = [
+ "extrem_gpu",
  "js-sys",
  "wasm-bindgen",
  "web-sys",
