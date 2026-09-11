@@ -246,7 +246,7 @@ impl BrowserClock {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
-        Self { offset_seconds: 0.0 }
+        Self { offset_seconds: Self::now_seconds() }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -256,14 +256,16 @@ impl BrowserClock {
             .unwrap_or(0.0)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn now_seconds() -> f64 {
+        use std::time::Instant;
+        Instant::now().elapsed().as_secs_f64()
+    }
+
     /// Seconds elapsed since `BrowserClock::new()`.
     #[must_use]
     pub fn elapsed(&self) -> f64 {
-        let now = if cfg!(target_arch = "wasm32") {
-            Self::now_seconds()
-        } else {
-            0.0
-        };
+        let now = Self::now_seconds();
         now - self.offset_seconds
     }
 }
@@ -336,12 +338,6 @@ impl WebCanvas {
     /// Always fails on native targets.
     pub fn acquire(_id: &str) -> Result<Self, WebSurfaceError> {
         Err(WebSurfaceError::UnsupportedTarget)
-    }
-
-    /// Underlying `HtmlCanvasElement` reference (for surface creation).
-    #[must_use]
-    pub fn canvas(&self) -> &web_sys::HtmlCanvasElement {
-        unreachable!("web canvas is only available on wasm32")
     }
 
     /// CSS pixel width of the canvas (or 0 if unavailable).
