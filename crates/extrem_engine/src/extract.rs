@@ -20,11 +20,7 @@ pub fn select_camera(world: &World, aspect: f32) -> Option<(Entity, Mat4)> {
                 .get::<CameraPriority>(entity)
                 .copied()
                 .unwrap_or_default();
-            Some((
-                priority,
-                entity,
-                camera.view_projection(transform, aspect),
-            ))
+            Some((priority, entity, camera.view_projection(transform, aspect)))
         })
         .max_by_key(|(priority, entity, _)| (*priority, Reverse(*entity)))
         .map(|(_, entity, matrix)| (entity, matrix))
