@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+mod extras;
+pub use extras::is_hierarchically_visible;
+
 const MAX_SCENE_NODES: usize = 1_000_000;
 const MAX_SCENE_DEPTH: usize = 256;
 
@@ -118,6 +121,10 @@ impl Projection {
     }
 }
 
+/// Explicit camera ranking. Higher values win; entity id is the tie-break.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CameraPriority(pub i32);
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Camera {
     pub active: bool,
@@ -193,7 +200,6 @@ pub fn set_parent(world: &mut World, child: Entity, parent: Entity) -> Result<()
         return Err(HierarchyError::SelfParent(child));
     }
 
-    // Existing data may already be corrupt. Never follow Parent links without a visited set.
     let mut visited = HashSet::new();
     let mut current = Some(parent);
     while let Some(curr) = current {
@@ -252,7 +258,6 @@ pub fn despawn_recursive(world: &mut World, entity: Entity) -> Result<(), Hierar
     }
 
     for current in to_despawn.into_iter().rev() {
-        // Every entity was checked alive above. If duplicated/corrupt edges existed, visited removed them.
         if world.contains(current) {
             world.despawn(current)?;
         }
@@ -384,9 +389,9 @@ impl Scene {
         parent: Entity,
         name: impl Into<String>,
         transform: Transform,
-    ) -> Result<Entity, WorldError> {
+    ) -> Result<Entity, HierarchyError> {
         if !world.contains(parent) {
-            return Err(WorldError::EntityNotFound(parent));
+            return Err(WorldError::EntityNotFound(parent).into());
         }
         let entity = world.spawn_empty();
         world.insert(entity, Name(name.into()))?;
@@ -395,12 +400,14 @@ impl Scene {
         world.insert(entity, Visibility(true))?;
         if let Err(error) = set_parent(world, entity, parent) {
             let _ = world.despawn(entity);
-            return Err(match error {
-                HierarchyError::World(world_error) => world_error,
-                _ => WorldError::EntityNotFound(entity),
-            });
+            return Err(error);
         }
         Ok(entity)
+    }
+
+    /// Drops root handles whose entities no longer exist.
+    pub fn prune_roots(&mut self, world: &World) {
+        self.roots.retain(|entity| world.contains(*entity));
     }
 
     pub fn document(&self, world: &World) -> SceneDocument {
@@ -411,6 +418,7 @@ impl Scene {
             roots: self
                 .roots
                 .iter()
+                .filter(|entity| world.contains(**entity))
                 .filter_map(|entity| snapshot_node(world, *entity, 0, &mut visited))
                 .collect(),
         }
@@ -511,7 +519,12 @@ fn instantiate_node(
     node: &SceneNode,
 ) -> Result<Entity, WorldError> {
     let entity = match parent {
-        Some(parent) => scene.spawn_child(world, parent, &node.name, node.transform)?,
+        Some(parent) => scene
+            .spawn_child(world, parent, &node.name, node.transform)
+            .map_err(|error| match error {
+                HierarchyError::World(world_error) => world_error,
+                _ => WorldError::EntityNotFound(parent),
+            })?,
         None => scene.spawn_entity(world, &node.name, node.transform)?,
     };
     world.insert(entity, Visibility(node.visible))?;
@@ -636,7 +649,6 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn(Transform::IDENTITY);
         let b = world.spawn(Transform::IDENTITY);
-        // Deliberately bypass the safe API to model malformed/deserialized state.
         world.insert(a, Children(vec![b])).expect("a children");
         world.insert(b, Children(vec![a])).expect("b children");
         world.insert(a, Parent(b)).expect("a parent");
@@ -699,5 +711,18 @@ mod tests {
                 .map(|children| children.0.len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn prune_roots_drops_despawned_entities() {
+        let mut world = World::new();
+        let mut scene = Scene::new("prune");
+        let root = scene
+            .spawn_entity(&mut world, "root", Transform::IDENTITY)
+            .expect("root");
+        world.despawn(root).expect("despawn");
+        scene.prune_roots(&world);
+        assert!(scene.roots.is_empty());
+        assert!(scene.document(&world).roots.is_empty());
     }
 }
