@@ -40,12 +40,13 @@ fn main() {
     engine
         .app_mut()
         .add_systems(Stage::Update, move |world, time| {
-            if world
+            let pressed = world
                 .get_resource::<Input>()
-                .is_some_and(|input| input.keys.just_pressed(KeyCode::W))
-                && let Some(transform) = world.get_mut::<Transform>(entity)
-            {
-                transform.translation.x += time.delta_seconds;
+                .is_some_and(|input| input.keys.just_pressed(KeyCode::W));
+            if pressed {
+                if let Some(transform) = world.get_mut::<Transform>(entity) {
+                    transform.translation.x += time.delta_seconds;
+                }
             }
         });
 

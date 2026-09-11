@@ -1,59 +1,40 @@
-DO NOT USE NOT FUNCTIONNAL
-
-
-
 # ExtremEngine
 
-ExtremEngine est un moteur de jeu Rust modulaire en construction. L’objectif est de réunir :
+ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt privilégie des contrats explicites de sûreté, de validation numérique et d'ordre d'exécution là où le résultat dépend de l'ordre. Il ne revendique pas encore une sûreté universelle, un déterminisme inter-plateforme complet ni un niveau de production AAA.
 
-- la simplicité et la modularité d’un moteur data-oriented ;
-- des outils de production plus riches à terme, inspirés des moteurs généralistes ;
-- une base native Rust, sûre, testable et extensible ;
-- un point d’intégration pour les calculs scientifiques et les simulations.
+## Modules du workspace
 
-## Premier incrément
+- `extrem_ecs` : entités générationnelles, composants, ressources et monde. Les slots sont retirés avant wrap de génération.
+- `extrem_math` : `Vec3`, `Quat`, `Mat4` et `Transform`; produit de Hamilton, composition TRS et projection WebGPU `z ∈ [0,1]` sont testés.
+- `extrem_scene` : hiérarchie parent/enfant, validation bidirectionnelle, traversal bornée contre les cycles corrompus, caméras et documents RON validés.
+- `extrem_editor` : transactions `CommandRecord`, undo/redo et inspection.
+- `extrem_assets` : clés de chemins virtuels validées en mode fail-closed, détection de collisions et handles typés.
+- `extrem_app` : stages, fixed timestep borné, signalement de dette de simulation abandonnée et assainissement du temps non fini.
+- `extrem_input` : clavier, souris et transitions de boutons.
+- `extrem_window` : boucle `winit`; les événements natifs sont effectivement injectés dans l'état `Input` avant chaque callback de frame.
+- `extrem_gpu` : contexte `wgpu`, surface de fenêtre avec gestion explicite des états d'acquisition et `WgpuPresenter` qui valide un chemin réel shader → render pass → draw → present.
+- `extrem_render` : contrat de backend, renderer nul/CPU et render graph persistant avec plan topologique mis en cache.
+- `extrem_web` : détection et validation des capacités d'exécution Web/WebGPU en contexte sécurisé.
+- `extrem_animation` : squelette, clips validés, sampling, nlerp/slerp, blending de poses, palette LBS et contrats transactionnels EEFP/VPAE expérimentaux.
+- `extrem_physics` : **solveur de référence minimal** (gravité + sol + box), avec validation des données. Ce n'est pas encore un solveur rigid-body général.
+- `extrem_science` : Euler/RK4 avec validation numérique et workspace RK4 réutilisable.
+- `extrem_audio` : contrat de commandes/backend audio et backend nul; sortie audio de production encore à implémenter.
+- `extrem_engine` : façade haut niveau, extraction déterminisée, render graph persistant et adaptateur `WgpuRenderer` vers le presenter GPU de validation.
 
-Ce dépôt contient actuellement un noyau exécutable :
+## Validation
 
-- `extrem_ecs` : entités, composants, ressources et monde ;
-- `extrem_math` : types mathématiques de base et transforms ;
-- `extrem_app` : temps, plugins, startup/fixed-update/update/post-update/render schedules ;
-- `extrem_assets` : handles typés, déduplication par chemin et registre d’assets ;
-- `extrem_audio` : commandes audio et contrat de backend ;
-- `extrem_editor` : commandes d’inspection, sélection et undo/redo ;
-- `extrem_input` : clavier, souris et transitions de boutons sans dépendance plateforme ;
-- `extrem_physics` : rigid bodies et résolution sol/gravity en fixed timestep ;
-- `extrem_scene` : composants de scène, hiérarchie parent/enfant et propagation des transforms ;
-- `extrem_render` : contrat de rendu remplaçable et backend nul pour les tests ;
-- `extrem_gpu` : initialisation wgpu headless isolée et exemple de détection GPU ;
-- `extrem_window` : hôte de fenêtre natif et boucle d’événements multiplateforme ;
-- `extrem_science` : primitives de simulation numérique sans dépendance obligatoire ;
-- `extrem_engine` : façade haut niveau et exemple de boucle de jeu.
-
-L’exemple sandbox valide la boucle moteur, les mises à jour ECS, le fixed timestep et l’extraction de commandes de rendu. `extrem_window` fournit l’hôte natif nécessaire au branchement d’un renderer interactif.
-
-## Démarrer
-
-Depuis ce dossier :
-
-```text
-cargo test --workspace --all-targets
-cargo run -p extrem_engine --example sandbox
-cargo run -p extrem_gpu --example probe
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --all-targets --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
-## Direction technique
+La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation sur GPU réel doit être qualifiée séparément.
 
-Le code est écrit à partir de contrats propres à ExtremEngine. L’archive Bevy fournie sert de référence d’architecture et de conception ; aucun fichier Bevy n’est copié dans ce workspace. Le dépôt public `Memorithm/ExtremEngine` héberge cette première version du noyau.
+## Documentation
 
-Le module scientifique n’active pas encore une dépendance `scirust` par défaut. Il expose une interface minimale afin de pouvoir brancher une bibliothèque de calcul spécialisée lorsqu’un besoin concret — intégration ODE, algèbre linéaire, champs, optimisation ou ML — sera défini.
-
-## État de livraison
-
-1. Terminé : fenêtre native, boucle d’événements et détection GPU `wgpu` headless.
-2. Terminé : assets typés, scènes RON et propagation de hiérarchie.
-3. Terminé : caméras, projections, render graph et renderer CPU de validation.
-4. Terminé : physique déterministe, audio abstrait et input clavier/souris.
-5. Terminé : inspection ECS, sélection et undo/redo côté éditeur.
-6. Terminé : Euler, RK4 et horloge de simulation pour les intégrations scientifiques.
-7. Suite : hot reload/importeurs, matériaux/lumières et renderer `wgpu` présentable.
+- `docs/ARCHITECTURE.md`
+- `docs/TRANSFORMS.md`
+- `docs/ANIMATION.md`
+- `docs/SECURITY.md`

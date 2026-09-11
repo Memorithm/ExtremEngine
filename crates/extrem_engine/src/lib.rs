@@ -9,11 +9,11 @@ use extrem_render::{
 use extrem_scene::propagate_transforms;
 
 pub use extrem_app::{Stage, Time};
-pub use extrem_assets::{AssetError, AssetId, Assets, Handle};
+pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
 pub use extrem_ecs::{Entity, WorldError};
 pub use extrem_editor::{EditorCommand, EditorError, EditorState, InspectorSnapshot};
-pub use extrem_gpu::{GpuContext, GpuError};
+pub use extrem_gpu::{GpuContext, GpuError, SurfaceFrameStatus, SurfaceTarget, WgpuPresenter};
 pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
@@ -22,7 +22,63 @@ pub use extrem_scene::{
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
-/// Configuration for the high-level engine facade.
+/// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
+///
+/// The current GPU path intentionally draws a built-in validation triangle. World mesh/material
+/// rendering is not claimed by this type yet; submitted world commands are counted for diagnostics.
+pub struct WgpuRenderer {
+    presenter: WgpuPresenter,
+    submitted_commands: usize,
+    last_stats: FrameStats,
+    last_surface_status: Option<SurfaceFrameStatus>,
+}
+
+impl WgpuRenderer {
+    pub fn new(presenter: WgpuPresenter) -> Self {
+        Self {
+            presenter,
+            submitted_commands: 0,
+            last_stats: FrameStats::default(),
+            last_surface_status: None,
+        }
+    }
+
+    pub fn presenter(&self) -> &WgpuPresenter {
+        &self.presenter
+    }
+
+    pub fn presenter_mut(&mut self) -> &mut WgpuPresenter {
+        &mut self.presenter
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        self.presenter.resize(width, height)
+    }
+
+    pub fn last_surface_status(&self) -> Option<SurfaceFrameStatus> {
+        self.last_surface_status
+    }
+}
+
+impl RenderBackend for WgpuRenderer {
+    fn begin_frame(&mut self, _info: FrameInfo) {
+        self.submitted_commands = 0;
+    }
+
+    fn submit(&mut self, _command: RenderCommand) {
+        self.submitted_commands = self.submitted_commands.saturating_add(1);
+    }
+
+    fn end_frame(&mut self) -> FrameStats {
+        self.last_surface_status = Some(self.presenter.render_validation_frame());
+        self.last_stats = FrameStats {
+            submitted_commands: self.submitted_commands,
+            drawn_pixels: 0,
+        };
+        self.last_stats
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EngineConfig {
     pub target_delta_seconds: f32,
@@ -42,11 +98,12 @@ impl Default for EngineConfig {
     }
 }
 
-/// The engine owns the application lifecycle and a replaceable renderer.
+/// The engine owns the application lifecycle, persistent render graph and a replaceable renderer.
 pub struct Engine<R: RenderBackend = NullRenderer> {
     app: App,
     renderer: R,
     config: EngineConfig,
+    render_graph: RenderGraph,
     last_frame_stats: FrameStats,
     last_render_passes: Vec<String>,
 }
@@ -63,6 +120,20 @@ impl Default for Engine<NullRenderer> {
     }
 }
 
+fn default_render_graph() -> RenderGraph {
+    let mut graph = RenderGraph::new();
+    let clear = graph.add_pass("clear");
+    let main = graph.add_pass("main");
+    let ui = graph.add_pass("ui");
+    graph
+        .add_dependency(main, clear)
+        .expect("default graph pass IDs are valid");
+    graph
+        .add_dependency(ui, main)
+        .expect("default graph pass IDs are valid");
+    graph
+}
+
 impl<R: RenderBackend> Engine<R> {
     pub fn with_renderer(renderer: R, config: EngineConfig) -> Self {
         let mut app = App::new();
@@ -73,10 +144,13 @@ impl<R: RenderBackend> Engine<R> {
             .add_systems(extrem_app::Stage::PostUpdate, |world, _| {
                 propagate_transforms(world)
             });
+        app.world_mut().insert_resource(Input::default());
+
         Self {
             app,
             renderer,
             config,
+            render_graph: default_render_graph(),
             last_frame_stats: FrameStats::default(),
             last_render_passes: Vec::new(),
         }
@@ -110,30 +184,43 @@ impl<R: RenderBackend> Engine<R> {
         self.config
     }
 
+    pub fn render_graph(&self) -> &RenderGraph {
+        &self.render_graph
+    }
+
+    pub fn render_graph_mut(&mut self) -> &mut RenderGraph {
+        &mut self.render_graph
+    }
+
+    /// Copies the current native input snapshot into the ECS before a frame update.
+    pub fn set_input_snapshot(&mut self, input: &Input) {
+        self.world_mut().insert_resource(input.clone());
+    }
+
     pub fn tick(&mut self, delta_seconds: f32) -> UpdateReport {
         let report = self.app.update(delta_seconds);
         self.renderer.begin_frame(FrameInfo {
             index: report.frame,
             delta_seconds: report.delta_seconds,
         });
-        let mut graph = RenderGraph::new();
-        let clear = graph.add_pass("clear");
-        let main = graph.add_pass("main");
-        let ui = graph.add_pass("ui");
-        let _ = graph.add_dependency(main, clear);
-        let _ = graph.add_dependency(ui, main);
-        self.last_render_passes = graph
+
+        let compiled = self
+            .render_graph
             .compile()
-            .expect("the engine render graph is acyclic")
+            .expect("the built-in render graph must remain acyclic");
+        self.last_render_passes = compiled
+            .execution_order
             .iter()
-            .filter_map(|pass| graph.pass_name(*pass).map(str::to_owned))
+            .filter_map(|pass| self.render_graph.pass_name(*pass).map(str::to_owned))
             .collect();
 
+        // ECS storage iteration is deliberately unspecified. Lowest entity ID is the explicit,
+        // deterministic tie-break until a dedicated camera priority component is introduced.
         let active_camera = self
             .world()
             .iter::<Camera>()
             .filter(|(_, camera)| camera.active)
-            .find_map(|(entity, camera)| {
+            .filter_map(|(entity, camera)| {
                 let transform = self
                     .world()
                     .get::<GlobalTransform>(entity)
@@ -143,13 +230,16 @@ impl<R: RenderBackend> Engine<R> {
                     entity,
                     camera.view_projection(transform, self.config.viewport_aspect),
                 ))
-            });
+            })
+            .min_by_key(|(entity, _)| *entity);
+
         if let Some((entity, view_projection)) = active_camera {
             self.renderer.submit(RenderCommand::SetCamera {
                 entity,
                 view_projection,
             });
         }
+
         let global_entities: HashSet<_> = self
             .world()
             .iter::<GlobalTransform>()
@@ -158,23 +248,35 @@ impl<R: RenderBackend> Engine<R> {
         let mut commands: Vec<_> = self
             .world()
             .iter::<GlobalTransform>()
-            .map(|(entity, transform)| RenderCommand::Transform {
-                entity,
-                translation: transform.0.translation,
+            .map(|(entity, transform)| {
+                (
+                    entity,
+                    RenderCommand::Transform {
+                        entity,
+                        translation: transform.0.translation,
+                    },
+                )
             })
             .collect();
         commands.extend(
             self.world()
                 .iter::<Transform>()
                 .filter(|(entity, _)| !global_entities.contains(entity))
-                .map(|(entity, transform)| RenderCommand::Transform {
-                    entity,
-                    translation: transform.translation,
+                .map(|(entity, transform)| {
+                    (
+                        entity,
+                        RenderCommand::Transform {
+                            entity,
+                            translation: transform.translation,
+                        },
+                    )
                 }),
         );
-        for command in commands {
+        commands.sort_by_key(|(entity, _)| *entity);
+        for (_, command) in commands {
             self.renderer.submit(command);
         }
+
         self.last_frame_stats = self.renderer.end_frame();
         if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
             input.end_frame();
@@ -226,7 +328,6 @@ mod tests {
         });
 
         engine.run_for(2);
-
         let position = engine
             .world()
             .get::<Transform>(entity)
@@ -250,7 +351,7 @@ mod tests {
             .expect("entity is alive");
         let mut input = Input::default();
         input.keys.press(KeyCode::Space);
-        engine.world_mut().insert_resource(input);
+        engine.set_input_snapshot(&input);
         engine.app_mut().add_systems(Stage::Update, |world, _| {
             assert!(
                 world
@@ -262,7 +363,6 @@ mod tests {
         });
 
         engine.tick(1.0 / 60.0);
-
         assert_eq!(engine.last_frame_stats().submitted_commands, 2);
         assert_eq!(engine.last_render_passes(), ["clear", "main", "ui"]);
         assert!(
@@ -273,5 +373,34 @@ mod tests {
                 .keys
                 .just_pressed(KeyCode::Space)
         );
+    }
+
+    #[test]
+    fn default_render_graph_is_persistent_across_ticks() {
+        let mut engine = Engine::new();
+        let version = engine.render_graph().version();
+        assert!(engine.render_graph().cached_plan().is_none());
+        engine.tick(1.0 / 60.0);
+        assert!(engine.render_graph().cached_plan().is_some());
+        engine.tick(1.0 / 60.0);
+        assert_eq!(engine.render_graph().version(), version);
+    }
+
+    #[test]
+    fn camera_selection_uses_lowest_entity_as_deterministic_tie_break() {
+        let mut engine = Engine::new();
+        let first = engine.world_mut().spawn(Transform::IDENTITY);
+        let second = engine.world_mut().spawn(Transform::IDENTITY);
+        engine
+            .world_mut()
+            .insert(second, Camera::default())
+            .expect("camera");
+        engine
+            .world_mut()
+            .insert(first, Camera::default())
+            .expect("camera");
+        engine.tick(1.0 / 60.0);
+        assert!(first < second);
+        assert_eq!(engine.last_frame_stats().submitted_commands, 3);
     }
 }
