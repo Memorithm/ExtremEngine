@@ -1,3 +1,5 @@
+pub mod frame;
+
 use extrem_ecs::{World, WorldError};
 
 /// Engine execution phases.
