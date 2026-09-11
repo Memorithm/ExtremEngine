@@ -17,7 +17,6 @@ members = [
     "crates/extrem_window",
     "crates/extrem_animation",
     "crates/extrem_web",
-    "crates/extrem_frame",
 ]
 
 [workspace.package]
