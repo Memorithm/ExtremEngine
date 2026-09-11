@@ -27,7 +27,11 @@ impl WebRuntimeCapabilities {
 
     #[must_use]
     pub fn summary(self) -> &'static str {
-        match (self.secure_context, self.webgpu_available, self.webgl_available) {
+        match (
+            self.secure_context,
+            self.webgpu_available,
+            self.webgl_available,
+        ) {
             (true, true, _) => "WebGPU ready",
             (true, false, true) => "WebGL ready",
             (true, false, false) | (false, true, _) | (false, false, true) => {
@@ -77,21 +81,13 @@ impl fmt::Display for WebSurfaceError {
                 formatter.write_str("browser surface creation requires wasm32")
             }
             Self::WindowUnavailable => formatter.write_str("browser Window is unavailable"),
-            Self::JavaScriptReflection => {
-                formatter.write_str("browser reflection failed")
-            }
-            Self::CanvasNotFound => {
-                formatter.write_str("target canvas element not found")
-            }
+            Self::JavaScriptReflection => formatter.write_str("browser reflection failed"),
+            Self::CanvasNotFound => formatter.write_str("target canvas element not found"),
             Self::CanvasNotHtmlElement => {
                 formatter.write_str("target element is not an HTML canvas")
             }
-            Self::ContextLost => {
-                formatter.write_str("GPU context lost")
-            }
-            Self::SurfaceConfigurationFailed => {
-                formatter.write_str("surface configuration failed")
-            }
+            Self::ContextLost => formatter.write_str("GPU context lost"),
+            Self::SurfaceConfigurationFailed => formatter.write_str("surface configuration failed"),
         }
     }
 }
@@ -215,10 +211,22 @@ impl WebCanvas {
     /// DPR is queried from the browser when `cfg.dpr <= 0.0`.
     /// Zero physical dimensions are clamped to 1×1 to satisfy wgpu surface requirements.
     pub fn configure_size(&self, cfg: &WebSurfaceConfig) -> (u32, u32) {
-        let dpr = if cfg.dpr > 0.0 { cfg.dpr } else { self.device_pixel_ratio() };
+        let dpr = if cfg.dpr > 0.0 {
+            cfg.dpr
+        } else {
+            self.device_pixel_ratio()
+        };
 
-        let css_w = if cfg.width > 0 { cfg.width } else { self.css_width() };
-        let css_h = if cfg.height > 0 { cfg.height } else { self.css_height() };
+        let css_w = if cfg.width > 0 {
+            cfg.width
+        } else {
+            self.css_width()
+        };
+        let css_h = if cfg.height > 0 {
+            cfg.height
+        } else {
+            self.css_height()
+        };
 
         let phys_w = (css_w as f64 * dpr).max(1.0) as u32;
         let phys_h = (css_h as f64 * dpr).max(1.0) as u32;
@@ -241,12 +249,17 @@ impl BrowserClock {
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
         let offset = Self::now_seconds();
-        Self { offset_seconds: offset }
+        Self {
+            offset_seconds: offset,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
-        Self { offset_seconds: Self::now_seconds() }
+        let offset = Self::now_seconds();
+        Self {
+            offset_seconds: offset,
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -266,7 +279,14 @@ impl BrowserClock {
     #[must_use]
     pub fn elapsed(&self) -> f64 {
         let now = Self::now_seconds();
-        now - self.offset_seconds
+        (now - self.offset_seconds).max(0.0)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for BrowserClock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -300,12 +320,11 @@ impl WebEventBridge {
     pub fn poll_lifecycle() -> WebLifecycle {
         let visibility = web_sys::window()
             .and_then(|w| w.document())
-            .and_then(|d| d.visibility_state().ok())
-            .and_then(|s| match s.as_str() {
-                "visible" => Some(WebVisibility::Visible),
-                "hidden" => Some(WebVisibility::Hidden),
-                "prerender" | "unloaded" => Some(WebVisibility::Prerender),
-                _ => None,
+            .map(|d| d.visibility_state())
+            .map(|state| match state {
+                web_sys::VisibilityState::Visible => WebVisibility::Visible,
+                web_sys::VisibilityState::Hidden => WebVisibility::Hidden,
+                _ => WebVisibility::Unknown,
             })
             .unwrap_or(WebVisibility::Unknown);
 
@@ -313,7 +332,10 @@ impl WebEventBridge {
             .and_then(|w| w.document())
             .map_or(false, |d| d.has_focus().unwrap_or(false));
 
-        WebLifecycle { visibility, focused }
+        WebLifecycle {
+            visibility,
+            focused,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

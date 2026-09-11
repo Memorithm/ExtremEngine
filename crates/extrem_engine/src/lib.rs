@@ -20,7 +20,7 @@ pub use extrem_scene::{
     Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
     SceneFormatError, SceneNode, Velocity, Visibility,
 };
-pub use extrem_web::{probe_web_runtime, WebProbeError, WebRuntimeCapabilities};
+pub use extrem_web::{WebProbeError, WebRuntimeCapabilities, probe_web_runtime};
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
 /// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
