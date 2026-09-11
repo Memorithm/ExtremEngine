@@ -1,0 +1,32 @@
+name: Branch clippy diagnostic
+
+on:
+  push:
+    branches: [feat/extrem-web-capabilities-20260911]
+
+permissions:
+  contents: read
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Capture clippy output
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets -- -D warnings > clippy.log 2>&1
+          status=$?
+          cat clippy.log
+          echo "$status" > clippy.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostic
+          path: |
+            clippy.log
+            clippy.status
