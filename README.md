@@ -14,6 +14,7 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 - `extrem_window` : boucle `winit`; les événements natifs sont effectivement injectés dans l'état `Input` avant chaque callback de frame.
 - `extrem_gpu` : contexte `wgpu`, surface de fenêtre avec gestion explicite des états d'acquisition et `WgpuPresenter` qui valide un chemin réel shader → render pass → draw → present.
 - `extrem_render` : contrat de backend, renderer nul/CPU et render graph persistant avec plan topologique mis en cache.
+- `extrem_web` : détection et validation des capacités d'exécution Web/WebGPU en contexte sécurisé.
 - `extrem_animation` : squelette, clips validés, sampling, nlerp/slerp, blending de poses, palette LBS et contrats transactionnels EEFP/VPAE expérimentaux.
 - `extrem_physics` : **solveur de référence minimal** (gravité + sol + box), avec validation des données. Ce n'est pas encore un solveur rigid-body général.
 - `extrem_science` : Euler/RK4 avec validation numérique et workspace RK4 réutilisable.
