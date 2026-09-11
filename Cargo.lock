@@ -445,6 +445,7 @@ dependencies = [
  "extrem_physics",
  "extrem_render",
  "extrem_scene",
+ "extrem_web",
  "extrem_window",
 ]
 

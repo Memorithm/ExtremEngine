@@ -18,6 +18,7 @@ extrem_physics = { path = "../extrem_physics" }
 extrem_render = { path = "../extrem_render" }
 extrem_scene = { path = "../extrem_scene" }
 extrem_gpu = { path = "../extrem_gpu" }
+extrem_web = { path = "../extrem_web" }
 extrem_window = { path = "../extrem_window" }
 
 [lints]

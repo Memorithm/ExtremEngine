@@ -20,6 +20,7 @@ pub use extrem_scene::{
     Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
     SceneFormatError, SceneNode, Velocity, Visibility,
 };
+pub use extrem_web::{probe_web_runtime, WebProbeError, WebRuntimeCapabilities};
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
 /// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
@@ -96,6 +97,13 @@ impl Default for EngineConfig {
             viewport_aspect: 16.0 / 9.0,
         }
     }
+}
+
+/// Returns the current browser's Web/WebGPU runtime capabilities when targeting wasm32.
+///
+/// On native targets this returns `Err(WebProbeError::UnsupportedTarget)`.
+pub fn web_capabilities() -> Result<WebRuntimeCapabilities, WebProbeError> {
+    probe_web_runtime()
 }
 
 /// The engine owns the application lifecycle, persistent render graph and a replaceable renderer.
