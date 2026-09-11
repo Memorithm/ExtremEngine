@@ -25,9 +25,13 @@ pub enum WebProbeError {
 impl fmt::Display for WebProbeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedTarget => formatter.write_str("browser capability probing requires wasm32"),
+            Self::UnsupportedTarget => {
+                formatter.write_str("browser capability probing requires wasm32")
+            }
             Self::WindowUnavailable => formatter.write_str("browser Window is unavailable"),
-            Self::JavaScriptReflection => formatter.write_str("browser capability reflection failed"),
+            Self::JavaScriptReflection => {
+                formatter.write_str("browser capability reflection failed")
+            }
         }
     }
 }
