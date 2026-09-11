@@ -90,11 +90,17 @@ pub fn process_window_event(input: &mut Input, event: &WindowEvent) {
 fn map_winit_key(key: WinitKeyCode) -> KeyCode {
     match key {
         WinitKeyCode::KeyA => KeyCode::A,
+        WinitKeyCode::ArrowDown => KeyCode::ArrowDown,
+        WinitKeyCode::ArrowLeft => KeyCode::ArrowLeft,
+        WinitKeyCode::ArrowRight => KeyCode::ArrowRight,
+        WinitKeyCode::ArrowUp => KeyCode::ArrowUp,
+        WinitKeyCode::ControlLeft | WinitKeyCode::ControlRight => KeyCode::Control,
         WinitKeyCode::KeyD => KeyCode::D,
         WinitKeyCode::KeyE => KeyCode::E,
         WinitKeyCode::Escape => KeyCode::Escape,
         WinitKeyCode::KeyQ => KeyCode::Q,
         WinitKeyCode::KeyS => KeyCode::S,
+        WinitKeyCode::ShiftLeft | WinitKeyCode::ShiftRight => KeyCode::Shift,
         WinitKeyCode::Space => KeyCode::Space,
         WinitKeyCode::KeyW => KeyCode::W,
         _ => KeyCode::Unknown(key as u32),
