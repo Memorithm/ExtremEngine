@@ -286,6 +286,13 @@ impl World {
             .get_mut(&TypeId::of::<T>())
             .and_then(|resource| resource.downcast_mut::<T>())
     }
+
+    pub fn remove_resource<T: Any>(&mut self) -> Option<T> {
+        self.resources
+            .remove(&TypeId::of::<T>())
+            .and_then(|resource| resource.downcast::<T>().ok())
+            .map(|resource| *resource)
+    }
 }
 
 #[cfg(test)]
@@ -359,5 +366,7 @@ mod tests {
         assert_eq!(world.insert_resource(12_u32), None);
         assert_eq!(world.insert_resource(20_u32), Some(12));
         assert_eq!(world.get_resource::<u32>(), Some(&20));
+        assert_eq!(world.remove_resource::<u32>(), Some(20));
+        assert_eq!(world.get_resource::<u32>(), None);
     }
 }
