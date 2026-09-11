@@ -71,23 +71,29 @@ mod tests {
 
     #[test]
     fn webgpu_initialization_requires_secure_context_and_gpu() {
-        assert!(WebRuntimeCapabilities {
-            secure_context: true,
-            webgpu_available: true,
-        }
-        .can_initialize_webgpu());
+        assert!(
+            WebRuntimeCapabilities {
+                secure_context: true,
+                webgpu_available: true,
+            }
+            .can_initialize_webgpu()
+        );
 
-        assert!(!WebRuntimeCapabilities {
-            secure_context: false,
-            webgpu_available: true,
-        }
-        .can_initialize_webgpu());
+        assert!(
+            !WebRuntimeCapabilities {
+                secure_context: false,
+                webgpu_available: true,
+            }
+            .can_initialize_webgpu()
+        );
 
-        assert!(!WebRuntimeCapabilities {
-            secure_context: true,
-            webgpu_available: false,
-        }
-        .can_initialize_webgpu());
+        assert!(
+            !WebRuntimeCapabilities {
+                secure_context: true,
+                webgpu_available: false,
+            }
+            .can_initialize_webgpu()
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
