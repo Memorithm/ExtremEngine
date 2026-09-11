@@ -14,6 +14,8 @@ pub enum BodyType {
 pub struct RigidBody {
     pub body_type: BodyType,
     pub mass: f32,
+    /// Per-second linear damping in `[0, +inf)`. `0` keeps the previous integrator.
+    pub linear_damping: f32,
 }
 
 impl Default for RigidBody {
@@ -21,6 +23,7 @@ impl Default for RigidBody {
         Self {
             body_type: BodyType::Dynamic,
             mass: 1.0,
+            linear_damping: 0.0,
         }
     }
 }
@@ -30,6 +33,7 @@ impl RigidBody {
         let body = Self {
             body_type: BodyType::Dynamic,
             mass,
+            linear_damping: 0.0,
         };
         body.validate()?;
         Ok(body)
@@ -38,13 +42,17 @@ impl RigidBody {
     pub fn validate(self) -> Result<(), PhysicsError> {
         match self.body_type {
             BodyType::Dynamic if !self.mass.is_finite() || self.mass <= 0.0 => {
-                Err(PhysicsError::InvalidMass)
+                return Err(PhysicsError::InvalidMass);
             }
             BodyType::Static if !self.mass.is_finite() || self.mass < 0.0 => {
-                Err(PhysicsError::InvalidMass)
+                return Err(PhysicsError::InvalidMass);
             }
-            _ => Ok(()),
+            _ => {}
         }
+        if !self.linear_damping.is_finite() || self.linear_damping < 0.0 {
+            return Err(PhysicsError::InvalidDamping);
+        }
+        Ok(())
     }
 }
 
@@ -166,6 +174,8 @@ pub fn step_physics(world: &mut World, time: Time) {
 
         let mut next_velocity = previous_velocity;
         next_velocity.0 += gravity * fixed_delta;
+        let damping = (1.0 - body.linear_damping * fixed_delta).clamp(0.0, 1.0);
+        next_velocity.0 *= damping;
         let mut next_translation = transform.translation + next_velocity.0 * fixed_delta;
         if !next_velocity.0.is_finite() || !next_translation.is_finite() {
             stats.rejected_bodies = stats.rejected_bodies.saturating_add(1);
@@ -183,7 +193,6 @@ pub fn step_physics(world: &mut World, time: Time) {
             }
         }
 
-        // Commit only after the complete candidate state passed all validation.
         if let Some(current_velocity) = world.get_mut::<Velocity>(entity) {
             *current_velocity = next_velocity;
         } else if world.insert(entity, next_velocity).is_err() {
@@ -202,6 +211,7 @@ pub fn step_physics(world: &mut World, time: Time) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhysicsError {
     InvalidMass,
+    InvalidDamping,
     InvalidCollider,
     InvalidGravity,
     InvalidTimestep,
@@ -211,6 +221,9 @@ impl fmt::Display for PhysicsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMass => write!(formatter, "a dynamic body must have finite positive mass"),
+            Self::InvalidDamping => {
+                write!(formatter, "linear damping must be finite and non-negative")
+            }
             Self::InvalidCollider => {
                 write!(formatter, "box half-extents must be finite and positive")
             }
@@ -226,10 +239,13 @@ impl std::error::Error for PhysicsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody};
+    use super::{
+        BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
+    };
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
+    use extrem_scene::Velocity;
 
     #[test]
     fn dynamic_body_falls_and_stops_on_ground() {
@@ -278,6 +294,7 @@ mod tests {
                 RigidBody {
                     body_type: BodyType::Dynamic,
                     mass: f32::NAN,
+                    linear_damping: 0.0,
                 },
             )
             .expect("body");
@@ -302,6 +319,9 @@ mod tests {
             .validate(),
             Err(PhysicsError::InvalidCollider)
         );
+        let mut invalid = RigidBody::default();
+        invalid.linear_damping = -1.0;
+        assert_eq!(invalid.validate(), Err(PhysicsError::InvalidDamping));
     }
 
     #[test]
@@ -311,9 +331,43 @@ mod tests {
         let body = RigidBody {
             body_type: BodyType::Static,
             mass: 0.0,
+            linear_damping: 0.0,
         };
         assert_eq!(body.validate(), Ok(()));
         world.insert(entity, body).expect("entity");
         assert_eq!(world.get::<RigidBody>(entity), Some(&body));
+    }
+
+    #[test]
+    fn linear_damping_reduces_horizontal_speed() {
+        let mut app = App::new();
+        app.add_plugin(PhysicsPlugin);
+        app.world_mut()
+            .insert_resource(super::Gravity(Vec3::ZERO));
+        let entity = app.world_mut().spawn_empty();
+        app.world_mut()
+            .insert(
+                entity,
+                RigidBody {
+                    body_type: BodyType::Dynamic,
+                    mass: 1.0,
+                    linear_damping: 4.0,
+                },
+            )
+            .expect("body");
+        app.world_mut()
+            .insert(entity, Transform::IDENTITY)
+            .expect("transform");
+        app.world_mut()
+            .insert(entity, Velocity(Vec3::new(10.0, 0.0, 0.0)))
+            .expect("velocity");
+        app.update(1.0 / 60.0);
+        let speed = app
+            .world()
+            .get::<Velocity>(entity)
+            .expect("velocity")
+            .0
+            .x;
+        assert!(speed > 0.0 && speed < 10.0);
     }
 }
