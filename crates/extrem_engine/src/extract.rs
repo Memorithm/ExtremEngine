@@ -1,9 +1,10 @@
+use std::cmp::Reverse;
+use std::collections::HashSet;
+
 use extrem_ecs::{Entity, World};
 use extrem_math::{Mat4, Transform};
 use extrem_render::RenderCommand;
-use extrem_scene::{
-    Camera, CameraPriority, GlobalTransform, is_hierarchically_visible,
-};
+use extrem_scene::{is_hierarchically_visible, Camera, CameraPriority, GlobalTransform};
 
 /// Picks the active camera with the highest priority, then the lowest entity id.
 pub fn select_camera(world: &World, aspect: f32) -> Option<(Entity, Mat4)> {
@@ -25,7 +26,7 @@ pub fn select_camera(world: &World, aspect: f32) -> Option<(Entity, Mat4)> {
                 camera.view_projection(transform, aspect),
             ))
         })
-        .max_by_key(|(priority, entity, _)| (*priority, std::cmp::Reverse(*entity)))
+        .max_by_key(|(priority, entity, _)| (*priority, Reverse(*entity)))
         .map(|(_, entity, matrix)| (entity, matrix))
 }
 
@@ -45,8 +46,7 @@ pub fn extract_transforms(world: &World) -> Vec<RenderCommand> {
         })
         .collect();
 
-    let extracted: std::collections::HashSet<Entity> =
-        commands.iter().map(|(entity, _)| *entity).collect();
+    let extracted: HashSet<Entity> = commands.iter().map(|(entity, _)| *entity).collect();
     commands.extend(
         world
             .iter::<Transform>()
@@ -82,9 +82,7 @@ mod tests {
         let high = world.spawn(Transform::IDENTITY);
         world.insert(low, Camera::default()).expect("cam");
         world.insert(high, Camera::default()).expect("cam");
-        world
-            .insert(high, CameraPriority(10))
-            .expect("priority");
+        world.insert(high, CameraPriority(10)).expect("priority");
         let selected = select_camera(&world, 1.0).expect("camera");
         assert_eq!(selected.0, high);
         assert!(low < high);
