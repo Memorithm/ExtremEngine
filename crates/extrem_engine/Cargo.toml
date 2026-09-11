@@ -7,6 +7,7 @@ license.workspace = true
 description = "High-level engine facade for ExtremEngine"
 
 [dependencies]
+extrem_animation = { path = "../extrem_animation" }
 extrem_app = { path = "../extrem_app" }
 extrem_assets = { path = "../extrem_assets" }
 extrem_audio = { path = "../extrem_audio" }
@@ -17,7 +18,9 @@ extrem_math = { path = "../extrem_math" }
 extrem_physics = { path = "../extrem_physics" }
 extrem_render = { path = "../extrem_render" }
 extrem_scene = { path = "../extrem_scene" }
+extrem_science = { path = "../extrem_science" }
 extrem_gpu = { path = "../extrem_gpu" }
+extrem_web = { path = "../extrem_web" }
 extrem_window = { path = "../extrem_window" }
 
 [lints]
