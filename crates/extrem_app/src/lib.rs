@@ -1,4 +1,5 @@
 pub mod frame;
+pub mod quality;
 
 use extrem_ecs::{World, WorldError};
 
