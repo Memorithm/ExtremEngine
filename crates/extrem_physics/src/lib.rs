@@ -317,8 +317,10 @@ mod tests {
             .validate(),
             Err(PhysicsError::InvalidCollider)
         );
-        let mut invalid = RigidBody::default();
-        invalid.linear_damping = -1.0;
+        let invalid = RigidBody {
+            linear_damping: -1.0,
+            ..RigidBody::default()
+        };
         assert_eq!(invalid.validate(), Err(PhysicsError::InvalidDamping));
     }
 
