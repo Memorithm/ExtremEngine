@@ -33,7 +33,11 @@ impl fmt::Display for GeometryDecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedCodec(codec) => {
-                write!(formatter, "geometry codec is not supported: {}", codec.as_str())
+                write!(
+                    formatter,
+                    "geometry codec is not supported: {}",
+                    codec.as_str()
+                )
             }
             Self::InvalidPayload(detail) => write!(formatter, "invalid geometry payload: {detail}"),
         }
@@ -93,7 +97,9 @@ mod tests {
                 return Err(GeometryDecodeError::UnsupportedCodec(codec));
             }
             if payload.is_empty() {
-                return Err(GeometryDecodeError::InvalidPayload("empty payload".to_owned()));
+                return Err(GeometryDecodeError::InvalidPayload(
+                    "empty payload".to_owned(),
+                ));
             }
             Ok(payload.to_vec())
         }
@@ -127,7 +133,9 @@ mod tests {
     fn decoder_errors_are_preserved() {
         assert_eq!(
             decode_with(&RawOnly, GeometryCodec::RawGltf, b""),
-            Err(GeometryDecodeError::InvalidPayload("empty payload".to_owned()))
+            Err(GeometryDecodeError::InvalidPayload(
+                "empty payload".to_owned()
+            ))
         );
     }
 }
