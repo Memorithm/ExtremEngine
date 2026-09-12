@@ -95,6 +95,7 @@ impl Default for Gravity {
 pub struct PhysicsStats {
     pub simulated_bodies: usize,
     pub contacts_with_ground: usize,
+    pub contacts_with_bodies: usize,
     pub rejected_bodies: usize,
 }
 
@@ -112,6 +113,78 @@ impl Plugin for PhysicsPlugin {
         app.world.insert_resource(PhysicsFault::default());
         app.add_systems(Stage::FixedUpdate, step_physics);
     }
+}
+
+#[derive(Clone, Copy)]
+struct ColliderPose {
+    entity: Entity,
+    translation: Vec3,
+    half_extents: Vec3,
+}
+
+/// Pushes `translation` out of `other` along the smallest overlap axis.
+/// Incoming velocity on that axis is cancelled.
+fn resolve_aabb(
+    translation: &mut Vec3,
+    velocity: &mut Vec3,
+    half: Vec3,
+    other: Vec3,
+    other_half: Vec3,
+) -> bool {
+    let delta = Vec3::new(
+        translation.x - other.x,
+        translation.y - other.y,
+        translation.z - other.z,
+    );
+    let overlap = Vec3::new(
+        half.x + other_half.x - delta.x.abs(),
+        half.y + other_half.y - delta.y.abs(),
+        half.z + other_half.z - delta.z.abs(),
+    );
+    if overlap.x <= 0.0 || overlap.y <= 0.0 || overlap.z <= 0.0 {
+        return false;
+    }
+
+    if overlap.x <= overlap.y && overlap.x <= overlap.z {
+        let sign = if delta.x == 0.0 { 1.0 } else { delta.x.signum() };
+        translation.x += overlap.x * sign;
+        if velocity.x * sign < 0.0 {
+            velocity.x = 0.0;
+        }
+    } else if overlap.y <= overlap.z {
+        let sign = if delta.y == 0.0 { 1.0 } else { delta.y.signum() };
+        translation.y += overlap.y * sign;
+        if velocity.y * sign < 0.0 {
+            velocity.y = 0.0;
+        }
+    } else {
+        let sign = if delta.z == 0.0 { 1.0 } else { delta.z.signum() };
+        translation.z += overlap.z * sign;
+        if velocity.z * sign < 0.0 {
+            velocity.z = 0.0;
+        }
+    }
+    true
+}
+
+fn collect_collider_poses(world: &World) -> Vec<ColliderPose> {
+    let mut poses: Vec<ColliderPose> = world
+        .iter::<BoxCollider>()
+        .filter_map(|(entity, collider)| {
+            collider.validate().ok()?;
+            let transform = world.get::<Transform>(entity).copied()?;
+            if !transform.is_valid() {
+                return None;
+            }
+            Some(ColliderPose {
+                entity,
+                translation: transform.translation,
+                half_extents: collider.half_extents,
+            })
+        })
+        .collect();
+    poses.sort_by_key(|pose| pose.entity);
+    poses
 }
 
 /// Advances the minimal reference physics system. Invalid state is rejected before mutation.
@@ -136,6 +209,7 @@ pub fn step_physics(world: &mut World, time: Time) {
     }
 
     world.insert_resource(PhysicsFault(None));
+    let mut poses = collect_collider_poses(world);
     let mut entities: Vec<Entity> = world
         .iter::<RigidBody>()
         .filter_map(|(entity, body)| (body.body_type == BodyType::Dynamic).then_some(entity))
@@ -191,6 +265,21 @@ pub fn step_physics(world: &mut World, time: Time) {
                 }
                 stats.contacts_with_ground = stats.contacts_with_ground.saturating_add(1);
             }
+
+            for pose in &poses {
+                if pose.entity == entity {
+                    continue;
+                }
+                if resolve_aabb(
+                    &mut next_translation,
+                    &mut next_velocity.0,
+                    collider.half_extents,
+                    pose.translation,
+                    pose.half_extents,
+                ) {
+                    stats.contacts_with_bodies = stats.contacts_with_bodies.saturating_add(1);
+                }
+            }
         }
 
         if let Some(current_velocity) = world.get_mut::<Velocity>(entity) {
@@ -201,6 +290,9 @@ pub fn step_physics(world: &mut World, time: Time) {
         }
         if let Some(current_transform) = world.get_mut::<Transform>(entity) {
             current_transform.translation = next_translation;
+        }
+        if let Some(pose) = poses.iter_mut().find(|pose| pose.entity == entity) {
+            pose.translation = next_translation;
         }
         stats.simulated_bodies = stats.simulated_bodies.saturating_add(1);
     }
@@ -239,7 +331,9 @@ impl std::error::Error for PhysicsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody};
+    use super::{
+        BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
+    };
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
@@ -277,6 +371,70 @@ mod tests {
                 .get_resource::<PhysicsStats>()
                 .expect("stats")
                 .simulated_bodies
+                > 0
+        );
+    }
+
+    #[test]
+    fn dynamic_body_rests_on_a_static_platform() {
+        let mut app = App::new();
+        app.add_plugin(PhysicsPlugin);
+        let platform = app.world_mut().spawn_empty();
+        app.world_mut()
+            .insert(
+                platform,
+                RigidBody {
+                    body_type: BodyType::Static,
+                    mass: 0.0,
+                    linear_damping: 0.0,
+                },
+            )
+            .expect("static");
+        app.world_mut()
+            .insert(platform, BoxCollider::default())
+            .expect("collider");
+        app.world_mut()
+            .insert(
+                platform,
+                Transform::from_translation(Vec3::new(0.0, 0.5, 0.0)),
+            )
+            .expect("transform");
+
+        let falling = app.world_mut().spawn_empty();
+        app.world_mut()
+            .insert(falling, RigidBody::default())
+            .expect("dynamic");
+        app.world_mut()
+            .insert(falling, BoxCollider::default())
+            .expect("collider");
+        app.world_mut()
+            .insert(
+                falling,
+                Transform::from_translation(Vec3::new(0.0, 3.0, 0.0)),
+            )
+            .expect("transform");
+
+        app.run_for(90, 1.0 / 60.0);
+        let height = app
+            .world()
+            .get::<Transform>(falling)
+            .expect("transform")
+            .translation
+            .y;
+        assert!(height >= 1.49);
+        assert_eq!(
+            app.world()
+                .get::<Transform>(platform)
+                .expect("platform")
+                .translation
+                .y,
+            0.5
+        );
+        assert!(
+            app.world()
+                .get_resource::<PhysicsStats>()
+                .expect("stats")
+                .contacts_with_bodies
                 > 0
         );
     }
