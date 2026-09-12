@@ -318,7 +318,7 @@ pub fn normalize_path(path: &str) -> Result<String, AssetPathError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_path, AssetId, AssetPathError, Assets};
+    use super::{AssetId, AssetPathError, Assets, normalize_path};
 
     #[test]
     fn asset_handles_are_typed_and_deduplicated_by_path() {
