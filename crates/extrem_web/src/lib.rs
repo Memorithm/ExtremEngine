@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+mod bootstrap;
+
+pub use bootstrap::{
+    PowerPreference, WebGpuBootstrapError, WebGpuBootstrapOptions, WebGpuBootstrapPlan,
+};
+
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
