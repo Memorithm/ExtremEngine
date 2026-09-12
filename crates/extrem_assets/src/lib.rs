@@ -337,7 +337,9 @@ mod tests {
     #[test]
     fn remove_drops_value_and_frees_the_path() {
         let mut assets = Assets::<String>::new();
-        let handle = assets.insert("meshes/hero.bin", "mesh".to_owned()).expect("insert");
+        let handle = assets
+            .insert("meshes/hero.bin", "mesh".to_owned())
+            .expect("insert");
         assert_eq!(assets.remove(handle), Some("mesh".to_owned()));
         assert!(assets.is_empty());
         let again = assets
