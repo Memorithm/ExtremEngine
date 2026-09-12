@@ -67,6 +67,14 @@ impl WgpuRenderer {
         self.presenter.resize(width, height)
     }
 
+    /// Resizes the surface to the DRS-scaled internal extent.
+    pub fn resize_to_scale(&mut self, width: u32, height: u32, scale: f32) -> bool {
+        match quality::scaled_extent(width, height, scale) {
+            Some((width, height)) => self.resize(width, height),
+            None => false,
+        }
+    }
+
     pub fn last_surface_status(&self) -> Option<SurfaceFrameStatus> {
         self.last_surface_status
     }
@@ -212,6 +220,10 @@ impl<R: RenderBackend> Engine<R> {
 
     pub fn resolution_scale(&self) -> f32 {
         self.quality.scale()
+    }
+
+    pub fn scaled_extent(&self, width: u32, height: u32) -> Option<(u32, u32)> {
+        self.quality.scaled_extent(width, height)
     }
 
     /// Copies the current native input snapshot into the ECS before a frame update.
@@ -412,5 +424,13 @@ mod tests {
         engine.tick(1.0 / 60.0);
         assert!(first < second);
         assert_eq!(engine.last_frame_stats().submitted_commands, 3);
+    }
+
+    #[test]
+    fn default_quality_scale_preserves_window_extent() {
+        let engine = Engine::new();
+        assert_eq!(engine.resolution_scale(), 1.0);
+        assert_eq!(engine.scaled_extent(800, 600), Some((800, 600)));
+        assert_eq!(engine.scaled_extent(0, 600), None);
     }
 }
