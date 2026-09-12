@@ -12,7 +12,6 @@ mod extract;
 mod quality_loop;
 
 pub use extract::{extract_transforms, select_camera};
-pub use quality_loop::QualityLoop;
 pub use extrem_app::frame;
 pub use extrem_app::lod;
 pub use extrem_app::quality;
@@ -29,6 +28,7 @@ pub use extrem_scene::{
     SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility, is_hierarchically_visible,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
+pub use quality_loop::QualityLoop;
 
 /// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
 ///
