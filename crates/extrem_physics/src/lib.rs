@@ -286,6 +286,16 @@ pub fn step_physics(world: &mut World, time: Time) {
                     body_contacts = body_contacts.saturating_add(1);
                 }
             }
+
+            // Body separation can choose the downward Y direction. Re-assert the ground
+            // constraint before committing so contacts cannot tunnel the body below its floor.
+            if next_translation.y < floor {
+                next_translation.y = floor;
+                if next_velocity.0.y < 0.0 {
+                    next_velocity.0.y = 0.0;
+                }
+                stats.contacts_with_ground = stats.contacts_with_ground.saturating_add(1);
+            }
         }
 
         if !next_velocity.0.is_finite() || !next_translation.is_finite() {
