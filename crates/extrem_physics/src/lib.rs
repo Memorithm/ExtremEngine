@@ -239,9 +239,7 @@ impl std::error::Error for PhysicsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
-    };
+    use super::{BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody};
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
@@ -342,8 +340,7 @@ mod tests {
     fn linear_damping_reduces_horizontal_speed() {
         let mut app = App::new();
         app.add_plugin(PhysicsPlugin);
-        app.world_mut()
-            .insert_resource(super::Gravity(Vec3::ZERO));
+        app.world_mut().insert_resource(super::Gravity(Vec3::ZERO));
         let entity = app.world_mut().spawn_empty();
         app.world_mut()
             .insert(
@@ -362,12 +359,7 @@ mod tests {
             .insert(entity, Velocity(Vec3::new(10.0, 0.0, 0.0)))
             .expect("velocity");
         app.update(1.0 / 60.0);
-        let speed = app
-            .world()
-            .get::<Velocity>(entity)
-            .expect("velocity")
-            .0
-            .x;
+        let speed = app.world().get::<Velocity>(entity).expect("velocity").0.x;
         assert!(speed > 0.0 && speed < 10.0);
     }
 }
