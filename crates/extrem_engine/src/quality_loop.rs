@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use extrem_app::frame::{FrameAssessment, FrameBudget, FrameSample, FrameStats as QualityStats};
-use extrem_app::quality::{DrsConfig, DrsController, DrsDecision};
+use extrem_app::quality::{DrsConfig, DrsController, DrsDecision, scaled_extent};
 
 /// CPU-side quality loop owned by the engine facade.
 ///
@@ -65,6 +65,11 @@ impl QualityLoop {
     }
 
     #[must_use]
+    pub fn scaled_extent(self, width: u32, height: u32) -> Option<(u32, u32)> {
+        scaled_extent(width, height, self.scale())
+    }
+
+    #[must_use]
     pub const fn last_assessment(self) -> Option<FrameAssessment> {
         self.last_assessment
     }
@@ -85,6 +90,7 @@ mod tests {
         let loop_ = QualityLoop::from_target_delta(1.0 / 60.0);
         assert_eq!(loop_.budget().target_hz_millihz(), 60_000);
         assert_eq!(loop_.scale(), 1.0);
+        assert_eq!(loop_.scaled_extent(1280, 720), Some((1280, 720)));
     }
 
     #[test]
@@ -98,5 +104,7 @@ mod tests {
         assert!(changed);
         assert!(loop_.scale() < 1.0);
         assert!(loop_.stats().over_budget_fraction() > 0.0);
+        let extent = loop_.scaled_extent(1920, 1080).expect("extent");
+        assert!(extent.0 < 1920 || extent.1 < 1080);
     }
 }
