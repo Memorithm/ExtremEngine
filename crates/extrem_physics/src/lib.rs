@@ -353,9 +353,7 @@ impl std::error::Error for PhysicsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
-    };
+    use super::{BodyType, BoxCollider, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody};
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
