@@ -16,7 +16,7 @@ pub use extrem_app::lod;
 pub use extrem_app::quality;
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::geometry_codec::{
-    GeometryCodec, GeometryDecodeError, GeometryDecoder, decode_with,
+    decode_with, GeometryCodec, GeometryDecodeError, GeometryDecoder,
 };
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
@@ -28,8 +28,8 @@ pub use extrem_physics::{
     BodyType, BoxCollider, Gravity, PhysicsError, PhysicsPlugin, PhysicsStats, RigidBody,
 };
 pub use extrem_scene::{
-    Camera, CameraPriority, Children, GlobalTransform, Name, Parent, Projection, Scene,
-    SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility, is_hierarchically_visible,
+    is_hierarchically_visible, Camera, CameraPriority, Children, GlobalTransform, Name, Parent,
+    Projection, Scene, SceneDocument, SceneFormatError, SceneNode, Velocity, Visibility,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 pub use quality_loop::QualityLoop;
@@ -328,26 +328,22 @@ mod tests {
         input.keys.press(KeyCode::Space);
         engine.set_input_snapshot(&input);
         engine.app_mut().add_systems(Stage::Update, |world, _| {
-            assert!(
-                world
-                    .get_resource::<Input>()
-                    .expect("input resource")
-                    .keys
-                    .just_pressed(KeyCode::Space)
-            );
+            assert!(world
+                .get_resource::<Input>()
+                .expect("input resource")
+                .keys
+                .just_pressed(KeyCode::Space));
         });
 
         engine.tick(1.0 / 60.0);
         assert_eq!(engine.last_frame_stats().submitted_commands, 2);
         assert_eq!(engine.last_render_passes(), ["clear", "main", "ui"]);
-        assert!(
-            !engine
-                .world()
-                .get_resource::<Input>()
-                .expect("input resource")
-                .keys
-                .just_pressed(KeyCode::Space)
-        );
+        assert!(!engine
+            .world()
+            .get_resource::<Input>()
+            .expect("input resource")
+            .keys
+            .just_pressed(KeyCode::Space));
     }
 
     #[test]
