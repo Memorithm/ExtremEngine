@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- `Engine::tick` samples CPU frame time into `QualityLoop` (frame budget + DRS). GPU time is not inferred.
-- Skip hierarchically hidden entities during render extraction.
-- `CameraPriority` selects the active camera; entity id remains the deterministic tie-break.
+- `Engine::tick` now calls `extract_{transforms,camera}` and samples CPU time into `QualityLoop`.
+- Hidden entities are skipped; `CameraPriority` wins over entity-id order.
+- Engine facade re-exports `PhysicsError` and the geometry codec boundary.
+- Sandbox prints the current DRS scale.
 - `Scene::prune_roots` drops stale root handles; scene documents ignore despawned roots.
 - `Scene::spawn_child` now returns `HierarchyError` instead of a misleading `EntityNotFound`.
 - Editor rename works on entities that have no `Name` yet; non-finite translation deltas are rejected.
