@@ -57,13 +57,11 @@ mod tests {
             secure_context: false,
             webgpu_available: true,
         };
-        assert_eq!(
-            WebGpuBootstrapPlan::from_capabilities(
-                capabilities,
-                WebGpuBootstrapOptions::default(),
-            ),
-            Err(WebGpuBootstrapError::InsecureContext),
+        let result = WebGpuBootstrapPlan::from_capabilities(
+            capabilities,
+            WebGpuBootstrapOptions::default(),
         );
+        assert_eq!(result, Err(WebGpuBootstrapError::InsecureContext));
     }
 
     #[test]
@@ -72,13 +70,11 @@ mod tests {
             secure_context: true,
             webgpu_available: false,
         };
-        assert_eq!(
-            WebGpuBootstrapPlan::from_capabilities(
-                capabilities,
-                WebGpuBootstrapOptions::default(),
-            ),
-            Err(WebGpuBootstrapError::WebGpuUnavailable),
+        let result = WebGpuBootstrapPlan::from_capabilities(
+            capabilities,
+            WebGpuBootstrapOptions::default(),
         );
+        assert_eq!(result, Err(WebGpuBootstrapError::WebGpuUnavailable));
     }
 
     #[test]
@@ -91,9 +87,7 @@ mod tests {
             power_preference: PowerPreference::LowPower,
             require_fallback_adapter: true,
         };
-        assert_eq!(
-            WebGpuBootstrapPlan::from_capabilities(capabilities, options),
-            Ok(WebGpuBootstrapPlan { options }),
-        );
+        let result = WebGpuBootstrapPlan::from_capabilities(capabilities, options);
+        assert_eq!(result, Ok(WebGpuBootstrapPlan { options }));
     }
 }
