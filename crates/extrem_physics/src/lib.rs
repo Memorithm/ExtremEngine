@@ -146,19 +146,31 @@ fn resolve_aabb(
     }
 
     if overlap.x <= overlap.y && overlap.x <= overlap.z {
-        let sign = if delta.x == 0.0 { 1.0 } else { delta.x.signum() };
+        let sign = if delta.x == 0.0 {
+            1.0
+        } else {
+            delta.x.signum()
+        };
         translation.x += overlap.x * sign;
         if velocity.x * sign < 0.0 {
             velocity.x = 0.0;
         }
     } else if overlap.y <= overlap.z {
-        let sign = if delta.y == 0.0 { 1.0 } else { delta.y.signum() };
+        let sign = if delta.y == 0.0 {
+            1.0
+        } else {
+            delta.y.signum()
+        };
         translation.y += overlap.y * sign;
         if velocity.y * sign < 0.0 {
             velocity.y = 0.0;
         }
     } else {
-        let sign = if delta.z == 0.0 { 1.0 } else { delta.z.signum() };
+        let sign = if delta.z == 0.0 {
+            1.0
+        } else {
+            delta.z.signum()
+        };
         translation.z += overlap.z * sign;
         if velocity.z * sign < 0.0 {
             velocity.z = 0.0;
@@ -357,7 +369,7 @@ mod tests {
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
-    use extrem_scene::{set_parent, Parent, Velocity};
+    use extrem_scene::{Parent, Velocity, set_parent};
 
     #[test]
     fn dynamic_body_falls_and_stops_on_ground() {
@@ -478,7 +490,10 @@ mod tests {
         let stats = app.world().get_resource::<PhysicsStats>().expect("stats");
         assert_eq!(stats.simulated_bodies, 0);
         assert_eq!(stats.rejected_bodies, 1);
-        assert_eq!(app.world().get::<Transform>(child), Some(&Transform::IDENTITY));
+        assert_eq!(
+            app.world().get::<Transform>(child),
+            Some(&Transform::IDENTITY)
+        );
     }
 
     #[test]
