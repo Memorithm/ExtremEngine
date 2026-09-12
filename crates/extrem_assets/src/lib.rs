@@ -1,3 +1,5 @@
+pub mod geometry_codec;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -316,7 +318,7 @@ pub fn normalize_path(path: &str) -> Result<String, AssetPathError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssetId, AssetPathError, Assets, normalize_path};
+    use super::{normalize_path, AssetId, AssetPathError, Assets};
 
     #[test]
     fn asset_handles_are_typed_and_deduplicated_by_path() {
