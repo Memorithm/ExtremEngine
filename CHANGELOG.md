@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `quality::scaled_extent` maps a window size and DRS scale to an internal pixel extent.
+- `Engine::scaled_extent` and `WgpuRenderer::resize_to_scale` consume that mapping.
 - `Engine::tick` now calls `extract_{transforms,camera}` and samples CPU time into `QualityLoop`.
 - Hidden entities are skipped; `CameraPriority` wins over entity-id order.
 - Engine facade re-exports `PhysicsError` and the geometry codec boundary.
