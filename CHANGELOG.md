@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Dynamic box colliders resolve against other AABBs along the smallest overlap axis.
+- `PhysicsStats::contacts_with_bodies` counts those contacts; static platforms stay put.
 - `quality::scaled_extent` maps a window size and DRS scale to an internal pixel extent.
 - `Engine::scaled_extent` and `WgpuRenderer::resize_to_scale` consume that mapping.
 - `Engine::tick` now calls `extract_{transforms,camera}` and samples CPU time into `QualityLoop`.
