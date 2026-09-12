@@ -60,7 +60,7 @@ mod tests {
         assert_eq!(
             WebGpuBootstrapPlan::from_capabilities(
                 capabilities,
-                WebGpuBootstrapOptions::default()
+                WebGpuBootstrapOptions::default(),
             ),
             Err(WebGpuBootstrapError::InsecureContext)
         );
@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(
             WebGpuBootstrapPlan::from_capabilities(
                 capabilities,
-                WebGpuBootstrapOptions::default()
+                WebGpuBootstrapOptions::default(),
             ),
             Err(WebGpuBootstrapError::WebGpuUnavailable)
         );
