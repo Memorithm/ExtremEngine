@@ -16,7 +16,7 @@ pub use extrem_app::lod;
 pub use extrem_app::quality;
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::geometry_codec::{
-    decode_with, GeometryCodec, GeometryDecodeError, GeometryDecoder,
+    GeometryCodec, GeometryDecodeError, GeometryDecoder, decode_with,
 };
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
 pub use extrem_audio::{AudioBackend, AudioCommand, NullAudioBackend};
