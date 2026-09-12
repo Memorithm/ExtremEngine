@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use extrem_ecs::{Entity, World};
 use extrem_math::{Mat4, Transform};
 use extrem_render::RenderCommand;
-use extrem_scene::{Camera, CameraPriority, GlobalTransform, is_hierarchically_visible};
+use extrem_scene::{is_hierarchically_visible, Camera, CameraPriority, GlobalTransform};
 
 /// Picks the active camera with the highest priority, then the lowest entity id.
 pub fn select_camera(world: &World, aspect: f32) -> Option<(Entity, Mat4)> {
