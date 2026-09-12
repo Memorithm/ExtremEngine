@@ -128,6 +128,23 @@ impl DrsController {
     }
 }
 
+/// Converts a window size and DRS scale into an internal render extent.
+///
+/// Non-finite or non-positive scales, and zero window axes, fail closed.
+/// A positive scale that would floor to zero is clamped to one pixel.
+#[must_use]
+pub fn scaled_extent(width: u32, height: u32, scale: f32) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let width = ((f64::from(width) * f64::from(scale)).floor() as u32).max(1);
+    let height = ((f64::from(height) * f64::from(scale)).floor() as u32).max(1);
+    Some((width, height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +221,30 @@ mod tests {
             DrsController::new(config, 1.0),
             Err(DrsError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn full_scale_preserves_window_pixels() {
+        assert_eq!(scaled_extent(1920, 1080, 1.0), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn half_scale_floors_each_axis() {
+        assert_eq!(scaled_extent(1920, 1080, 0.5), Some((960, 540)));
+        assert_eq!(scaled_extent(101, 51, 0.5), Some((50, 25)));
+    }
+
+    #[test]
+    fn tiny_scale_still_keeps_one_pixel() {
+        assert_eq!(scaled_extent(8, 8, 0.01), Some((1, 1)));
+    }
+
+    #[test]
+    fn invalid_extent_inputs_fail_closed() {
+        assert_eq!(scaled_extent(0, 1080, 1.0), None);
+        assert_eq!(scaled_extent(1920, 0, 1.0), None);
+        assert_eq!(scaled_extent(1920, 1080, 0.0), None);
+        assert_eq!(scaled_extent(1920, 1080, -0.5), None);
+        assert_eq!(scaled_extent(1920, 1080, f32::NAN), None);
     }
 }
