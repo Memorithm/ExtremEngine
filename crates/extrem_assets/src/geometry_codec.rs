@@ -77,7 +77,7 @@ pub fn decode_with<D: GeometryDecoder>(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_with, GeometryCodec, GeometryDecodeError, GeometryDecoder};
+    use super::{GeometryCodec, GeometryDecodeError, GeometryDecoder, decode_with};
 
     struct RawOnly;
 
