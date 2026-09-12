@@ -60,7 +60,11 @@ fn main() {
             .translation;
         println!(
             "frame={} elapsed={:.3}s position=({:.3}, {:.3}, {:.3})",
-            report.frame, report.elapsed_seconds, position.x, position.y, position.z,
+            report.frame,
+            report.elapsed_seconds,
+            position.x,
+            position.y,
+            position.z,
         );
         println!(
             "render_commands={} scale={:.2} render_passes={:?}",
