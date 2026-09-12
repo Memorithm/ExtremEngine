@@ -1,7 +1,7 @@
 use extrem_app::{App, Plugin, Stage, Time};
 use extrem_ecs::{Entity, World};
 use extrem_math::{Transform, Vec3};
-use extrem_scene::Velocity;
+use extrem_scene::{Parent, Velocity};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,7 +141,7 @@ fn resolve_aabb(
         half.y + other_half.y - delta.y.abs(),
         half.z + other_half.z - delta.z.abs(),
     );
-    if overlap.x <= 0.0 || overlap.y <= 0.0 || overlap.z <= 0.0 {
+    if !overlap.is_finite() || overlap.x <= 0.0 || overlap.y <= 0.0 || overlap.z <= 0.0 {
         return false;
     }
 
@@ -164,13 +164,18 @@ fn resolve_aabb(
             velocity.z = 0.0;
         }
     }
-    true
+    translation.is_finite() && velocity.is_finite()
 }
 
 fn collect_collider_poses(world: &World) -> Vec<ColliderPose> {
     let mut poses: Vec<ColliderPose> = world
         .iter::<BoxCollider>()
         .filter_map(|(entity, collider)| {
+            // Local transforms are not a common collision space. Until the reference solver
+            // consumes GlobalTransform, parented colliders are intentionally unsupported.
+            if world.get::<Parent>(entity).is_some() {
+                return None;
+            }
             collider.validate().ok()?;
             let transform = world.get::<Transform>(entity).copied()?;
             if !transform.is_valid() {
@@ -220,7 +225,7 @@ pub fn step_physics(world: &mut World, time: Time) {
         let Some(body) = world.get::<RigidBody>(entity).copied() else {
             continue;
         };
-        if body.validate().is_err() {
+        if body.validate().is_err() || world.get::<Parent>(entity).is_some() {
             stats.rejected_bodies = stats.rejected_bodies.saturating_add(1);
             continue;
         }
@@ -256,6 +261,7 @@ pub fn step_physics(world: &mut World, time: Time) {
             continue;
         }
 
+        let mut body_contacts = 0usize;
         if let Some(collider) = collider {
             let floor = collider.half_extents.y;
             if next_translation.y < floor {
@@ -277,9 +283,14 @@ pub fn step_physics(world: &mut World, time: Time) {
                     pose.translation,
                     pose.half_extents,
                 ) {
-                    stats.contacts_with_bodies = stats.contacts_with_bodies.saturating_add(1);
+                    body_contacts = body_contacts.saturating_add(1);
                 }
             }
+        }
+
+        if !next_velocity.0.is_finite() || !next_translation.is_finite() {
+            stats.rejected_bodies = stats.rejected_bodies.saturating_add(1);
+            continue;
         }
 
         if let Some(current_velocity) = world.get_mut::<Velocity>(entity) {
@@ -294,6 +305,7 @@ pub fn step_physics(world: &mut World, time: Time) {
         if let Some(pose) = poses.iter_mut().find(|pose| pose.entity == entity) {
             pose.translation = next_translation;
         }
+        stats.contacts_with_bodies = stats.contacts_with_bodies.saturating_add(body_contacts);
         stats.simulated_bodies = stats.simulated_bodies.saturating_add(1);
     }
 
@@ -337,7 +349,7 @@ mod tests {
     use extrem_app::App;
     use extrem_ecs::World;
     use extrem_math::{Transform, Vec3};
-    use extrem_scene::Velocity;
+    use extrem_scene::{set_parent, Parent, Velocity};
 
     #[test]
     fn dynamic_body_falls_and_stops_on_ground() {
@@ -437,6 +449,28 @@ mod tests {
                 .contacts_with_bodies
                 > 0
         );
+    }
+
+    #[test]
+    fn parented_dynamic_body_is_rejected_until_global_space_is_supported() {
+        let mut app = App::new();
+        app.add_plugin(PhysicsPlugin);
+        let parent = app.world_mut().spawn(Transform::IDENTITY);
+        let child = app.world_mut().spawn(Transform::IDENTITY);
+        app.world_mut()
+            .insert(child, RigidBody::default())
+            .expect("body");
+        app.world_mut()
+            .insert(child, BoxCollider::default())
+            .expect("collider");
+        set_parent(app.world_mut(), child, parent).expect("parent");
+        assert_eq!(app.world().get::<Parent>(child), Some(&Parent(parent)));
+
+        app.update(1.0 / 60.0);
+        let stats = app.world().get_resource::<PhysicsStats>().expect("stats");
+        assert_eq!(stats.simulated_bodies, 0);
+        assert_eq!(stats.rejected_bodies, 1);
+        assert_eq!(app.world().get::<Transform>(child), Some(&Transform::IDENTITY));
     }
 
     #[test]
