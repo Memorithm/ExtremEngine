@@ -59,18 +59,15 @@ fn main() {
             .expect("transform")
             .translation;
         println!(
-            "frame={} elapsed={:.3}s position=({:.3}, {:.3}, {:.3})",
+            "frame={} elapsed={:.3}s position=({:.3}, {:.3}, {:.3}) render_commands={} scale={:.2}",
             report.frame,
             report.elapsed_seconds,
             position.x,
             position.y,
             position.z,
-        );
-        println!(
-            "render_commands={} scale={:.2} render_passes={:?}",
             engine.last_frame_stats().submitted_commands,
             engine.resolution_scale(),
-            engine.last_render_passes(),
         );
+        println!("render_passes={:?}", engine.last_render_passes());
     }
 }
