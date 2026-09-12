@@ -62,7 +62,7 @@ mod tests {
                 capabilities,
                 WebGpuBootstrapOptions::default(),
             ),
-            Err(WebGpuBootstrapError::InsecureContext)
+            Err(WebGpuBootstrapError::InsecureContext),
         );
     }
 
@@ -77,7 +77,7 @@ mod tests {
                 capabilities,
                 WebGpuBootstrapOptions::default(),
             ),
-            Err(WebGpuBootstrapError::WebGpuUnavailable)
+            Err(WebGpuBootstrapError::WebGpuUnavailable),
         );
     }
 
@@ -93,7 +93,7 @@ mod tests {
         };
         assert_eq!(
             WebGpuBootstrapPlan::from_capabilities(capabilities, options),
-            Ok(WebGpuBootstrapPlan { options })
+            Ok(WebGpuBootstrapPlan { options }),
         );
     }
 }
