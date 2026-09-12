@@ -1,3 +1,5 @@
+pub mod geometry_codec;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
