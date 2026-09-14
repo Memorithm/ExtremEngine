@@ -5,6 +5,7 @@ on:
     branches: ["agent/**", main]
     paths:
       - "crates/extrem_scene/**"
+      - "crates/extrem_engine/**"
       - "crates/extrem_ecs/**"
       - "crates/extrem_math/**"
       - "Cargo.toml"
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - "crates/extrem_scene/**"
+      - "crates/extrem_engine/**"
       - "crates/extrem_ecs/**"
       - "crates/extrem_math/**"
       - "Cargo.toml"
@@ -44,6 +46,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Scene tests
         run: cargo test -p extrem_scene --all-targets --locked
+      - name: Engine propagation integration tests
+        run: cargo test -p extrem_engine --test propagation_runtime --locked
       - name: Scene lints
         run: cargo clippy -p extrem_scene --all-targets --locked -- -D warnings
       - name: Record execution environment
@@ -64,11 +68,17 @@ jobs:
         run: |
           export EXTREM_BENCH_REVISION="$(git rev-parse HEAD)"
           cargo run --release -p extrem_scene --example hierarchy_bench --locked | tee scene-benchmark.csv
+      - name: Paired transform propagation benchmark
+        shell: bash
+        run: |
+          export EXTREM_BENCH_REVISION="$(git rev-parse HEAD)"
+          cargo run --release -p extrem_scene --example propagation_bench --locked | tee propagation-benchmark.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: scene-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             scene-environment.txt
             scene-benchmark.csv
+            propagation-benchmark.csv
           if-no-files-found: error
           retention-days: 90

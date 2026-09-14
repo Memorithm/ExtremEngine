@@ -78,10 +78,68 @@ model or adding a heavy dependency to this specialized validation seam. A shared
 sparse functional-graph primitive needs an actual second consumer and compatible
 tests before extraction. This increment changes no other repository.
 
+## EE-PERF-02: transform propagation
+
+Baseline: `propagate_transforms` at
+`a00b6e513162d9a82473dfa5fe041e6cda465756`. The body is frozen in
+`crates/extrem_scene/tests/support/legacy_propagation.rs` (test/example only).
+Each visited node previously cloned its Children vector. The new traversal borrows
+that list after writing the parent's global transform, and owns reusable pending
+and visited collections. The compatibility function keeps its signature and uses
+fresh scratch. The engine's existing PostUpdate closure now captures one
+`TransformPropagator` per engine: this is wired into actual runtime execution,
+not just exposed as an unused library API.
+
+Root discovery, LIFO traversal order, Entity generation checks and TRS composition
+are unchanged. This is full recomputation, not dirty-subtree caching. It is also
+not a hierarchy validator, a numeric sanitization pass or a matrix/shear redesign.
+Unreachable nodes keep their prior globals, missing child transforms are skipped,
+and reachable malformed cycles terminate through the visited set, as before.
+For conflicting multi-parent data, root/first-visit order remains unspecified.
+Validate scenes at ingestion/edit boundaries before running the hot path.
+
+`TransformPropagationStats` reports visited nodes, links, skipped revisits/missing
+locals, first-time global insertion, defensive write errors and scratch capacities.
+The engine updates the existing stats resource in place on normal frames; a
+replaced App world receives a new stats resource. Scratch is cleared semantically
+every call even across world replacement. No raw entity index controls allocation.
+The standalone `release_memory()` drops scratch; the captured engine workspace
+currently retains its high-water capacity for the lifetime of that system. Capacity
+counts are not allocator counts, RSS, GPU memory or a claim of zero allocations.
+
+Ten propagation tests cover bitwise TRS parity against the old code on the same
+World, all 625 four-node parent graphs, an independent parent-first oracle on
+valid shapes, deep/wide 20,000-node scenes, corruption, stale/extreme IDs, missing
+components, edits/reparent/detach, signed zero, world replacement and scratch reset.
+Two engine tests exercise Update -> PostUpdate -> Render, runtime scratch reuse,
+resource recreation and same-valued world-local IDs after replacing the World.
+
+```bash
+cargo test -p extrem_scene --test propagation_contract --locked
+cargo test -p extrem_engine --test propagation_runtime --locked
+EXTREM_BENCH_REVISION="$(git rev-parse HEAD)" \
+  cargo run --release -p extrem_scene --example propagation_bench --locked
+```
+
+The paired release benchmark uses chain/wide/balanced/independent-root scenes of
+32, 512, 2,048 and 20,000 nodes: 3 warmups and 21 observations per variant. Each
+sample changes a root input, computes an old-code reference, resets global outputs,
+and rotates legacy/fresh/reused order on the same World. Every TRS field is checked
+bitwise after every timed run. Setup, resets, oracle execution, comparison and
+printing are outside timing. Globals are preallocated: this measures steady-state
+propagation including scratch management, not scene construction or first insertion.
+The raw samples, median, nearest-rank p95 (20th ordered observation of 21) and
+scratch capacities are uploaded with the execution environment. This small p95 is
+not a reliable tail-latency qualification. Report all regressions as well as gains.
+Both old and new traversals are already linear in reachable nodes/edges under
+normal hashing; this slice targets copies/allocations, not asymptotic improvement.
+No FPS, GPU, end-to-end game or universal speedup claim follows from this benchmark.
+
 ## Ordered next slices (planned, not implemented here)
 
-1. Profile transform propagation and render extraction; remove repeated child-list
-   clones and reusable-scratch allocations with exact output comparison.
+1. Profile render extraction and its temporary entity set/command allocations;
+   retain exact camera selection and command-order comparison before optimization.
+   Separately repair the externally mutable render-graph panic contract.
 2. Measure ECS query and entity-count costs under churn; improve storage only when
    workloads demonstrate a benefit and stale-generation behavior remains intact.
 3. Add conservative visibility/culling, draw batching and instancing to the actual

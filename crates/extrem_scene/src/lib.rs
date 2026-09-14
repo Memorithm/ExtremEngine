@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+mod propagation;
+pub use propagation::{TransformPropagationStats, TransformPropagator, propagate_transforms};
 mod validation;
 pub use validation::{HierarchyValidationStats, HierarchyValidator, validate_hierarchy};
 
@@ -468,40 +470,6 @@ fn instantiate_node(
         instantiate_node(scene, world, Some(entity), child)?;
     }
     Ok(entity)
-}
-
-/// Recomputes world transforms from roots. Corrupt cycles terminate through the visited set.
-pub fn propagate_transforms(world: &mut World) {
-    let roots: Vec<_> = world
-        .iter::<Transform>()
-        .filter_map(|(entity, transform)| {
-            world
-                .get::<Parent>(entity)
-                .is_none()
-                .then_some((entity, *transform))
-        })
-        .collect();
-
-    let mut pending = roots;
-    let mut visited = HashSet::new();
-    while let Some((entity, parent_global)) = pending.pop() {
-        if !visited.insert(entity) {
-            continue;
-        }
-        if let Some(global) = world.get_mut::<GlobalTransform>(entity) {
-            global.0 = parent_global;
-        } else if world.contains(entity) {
-            let _ = world.insert(entity, GlobalTransform(parent_global));
-        }
-        let children: Vec<_> = world
-            .get::<Children>(entity)
-            .map_or_else(Vec::new, |children| children.0.clone());
-        for child in children {
-            if let Some(local) = world.get::<Transform>(child).copied() {
-                pending.push((child, Transform::combine(parent_global, local)));
-            }
-        }
-    }
 }
 
 #[cfg(test)]
