@@ -21,7 +21,10 @@ fn failed_undo_preserves_the_record_for_retry() {
     assert!(editor.undo(&mut world).is_err());
     world.insert(entity, removed).unwrap();
     assert!(editor.undo(&mut world).unwrap());
-    assert_eq!(world.get::<Transform>(entity).unwrap().translation, Vec3::ZERO);
+    assert_eq!(
+        world.get::<Transform>(entity).unwrap().translation,
+        Vec3::ZERO
+    );
 }
 
 #[test]
@@ -167,7 +170,11 @@ fn failed_delete_does_not_change_selection() {
     world.despawn(stale).unwrap();
     let mut editor = EditorState::default();
     editor.selection = Some(stale);
-    assert!(editor.apply(&mut world, EditorCommand::Delete(stale)).is_err());
+    assert!(
+        editor
+            .apply(&mut world, EditorCommand::Delete(stale))
+            .is_err()
+    );
     assert_eq!(editor.selection, Some(stale));
 }
 
@@ -205,7 +212,11 @@ fn corrupt_hierarchy_is_rejected_before_delete() {
     editor
         .apply(&mut world, EditorCommand::Select(parent))
         .unwrap();
-    assert!(editor.apply(&mut world, EditorCommand::Delete(parent)).is_err());
+    assert!(
+        editor
+            .apply(&mut world, EditorCommand::Delete(parent))
+            .is_err()
+    );
     assert!(world.contains(parent));
     assert!(world.contains(unrelated));
     assert_eq!(editor.selection, Some(parent));
