@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "EXTREM_BENCH_REVISION must be the 40-digit checked-out Git SHA",
-        ).into());
+        )
+        .into());
     }
     const WARMUP: usize = 3;
     const SAMPLES: usize = 21;
@@ -44,8 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
             for sample in 0..SAMPLES {
                 // Change an input each sample. Reference production math, not cached globals.
-                world.get_mut::<Transform>(ids[0]).expect("fixture root").translation.x =
-                    sample as f32 / 128.0;
+                world
+                    .get_mut::<Transform>(ids[0])
+                    .expect("fixture root")
+                    .translation
+                    .x = sample as f32 / 128.0;
                 legacy::legacy_propagate_transforms(&mut world);
                 let expected = snapshot(&world);
                 for offset in 0..3 {

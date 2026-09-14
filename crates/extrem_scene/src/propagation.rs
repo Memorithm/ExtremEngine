@@ -45,12 +45,13 @@ impl TransformPropagator {
     pub fn propagate(&mut self, world: &mut World) -> TransformPropagationStats {
         self.pending.clear();
         self.visited.clear();
-        self.pending.extend(world.iter::<Transform>().filter_map(|(entity, transform)| {
-            world
-                .get::<Parent>(entity)
-                .is_none()
-                .then_some((entity, *transform))
-        }));
+        self.pending
+            .extend(world.iter::<Transform>().filter_map(|(entity, transform)| {
+                world
+                    .get::<Parent>(entity)
+                    .is_none()
+                    .then_some((entity, *transform))
+            }));
         let mut stats = TransformPropagationStats {
             roots: self.pending.len(),
             ..TransformPropagationStats::default()
@@ -77,7 +78,8 @@ impl TransformPropagator {
                 stats.child_links += children.0.len();
                 for &child in &children.0 {
                     if let Some(local) = world.get::<Transform>(child).copied() {
-                        self.pending.push((child, Transform::combine(parent_global, local)));
+                        self.pending
+                            .push((child, Transform::combine(parent_global, local)));
                     } else {
                         stats.missing_child_transforms += 1;
                     }

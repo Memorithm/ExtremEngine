@@ -1,8 +1,8 @@
 use extrem_ecs::{Entity, World};
 use extrem_math::{Quat, Transform, Vec3};
 use extrem_scene::{
-    Children, GlobalTransform, Parent, TransformPropagationStats, TransformPropagator,
-    detach, propagate_transforms, set_parent, validate_hierarchy,
+    Children, GlobalTransform, Parent, TransformPropagationStats, TransformPropagator, detach,
+    propagate_transforms, set_parent, validate_hierarchy,
 };
 
 #[path = "support/propagation_fixture.rs"]
@@ -22,9 +22,18 @@ fn restore(world: &mut World, initial: &[(Entity, GlobalTransform)]) {
 }
 
 /// Execute all variants against the same World to preserve unspecified Transform-map order.
-fn assert_parity(world: &mut World, scratch: &mut TransformPropagator) -> TransformPropagationStats {
-    let initial: Vec<_> = world.iter::<GlobalTransform>().map(|(id, g)| (id, *g)).collect();
-    let locals: Vec<_> = world.iter::<Transform>().map(|(id, t)| (id, bits(*t))).collect();
+fn assert_parity(
+    world: &mut World,
+    scratch: &mut TransformPropagator,
+) -> TransformPropagationStats {
+    let initial: Vec<_> = world
+        .iter::<GlobalTransform>()
+        .map(|(id, g)| (id, *g))
+        .collect();
+    let locals: Vec<_> = world
+        .iter::<Transform>()
+        .map(|(id, t)| (id, bits(*t)))
+        .collect();
     legacy::legacy_propagate_transforms(world);
     let expected = snapshot(world);
     restore(world, &initial);
@@ -34,7 +43,10 @@ fn assert_parity(world: &mut World, scratch: &mut TransformPropagator) -> Transf
     restore(world, &initial);
     propagate_transforms(world);
     assert_eq!(snapshot(world), expected);
-    let after: Vec<_> = world.iter::<Transform>().map(|(id, t)| (id, bits(*t))).collect();
+    let after: Vec<_> = world
+        .iter::<Transform>()
+        .map(|(id, t)| (id, bits(*t)))
+        .collect();
     assert_eq!(locals, after);
     stats
 }
@@ -57,7 +69,10 @@ fn all_shapes_match_legacy_and_independent_parent_first_oracle() {
                     None => local(index),
                 };
                 expected.push(global);
-                assert_eq!(bits(world.get::<GlobalTransform>(entity).unwrap().0), bits(global));
+                assert_eq!(
+                    bits(world.get::<GlobalTransform>(entity).unwrap().0),
+                    bits(global)
+                );
             }
         }
     }
@@ -103,8 +118,12 @@ fn deep_and_wide_twenty_thousand_nodes_are_iterative_and_reusable() {
 #[test]
 fn reachable_corrupt_cycles_duplicates_and_shared_child_terminate() {
     let (mut world, ids) = fixture(Shape::Wide, 3).unwrap();
-    world.insert(ids[0], Children(vec![ids[1], ids[2], ids[1]])).unwrap();
-    world.insert(ids[1], Children(vec![ids[0], ids[2]])).unwrap();
+    world
+        .insert(ids[0], Children(vec![ids[1], ids[2], ids[1]]))
+        .unwrap();
+    world
+        .insert(ids[1], Children(vec![ids[0], ids[2]]))
+        .unwrap();
     let mut scratch = TransformPropagator::default();
     let stats = assert_parity(&mut world, &mut scratch);
     assert_eq!(stats.visited, 3);
@@ -120,12 +139,24 @@ fn missing_locals_and_stale_or_extreme_child_ids_are_not_followed() {
     let replacement = world.spawn(Transform::IDENTITY);
     let sentinel = GlobalTransform(Transform::from_translation(Vec3::new(123.0, 0.0, 0.0)));
     world.insert(ids[2], sentinel).unwrap();
-    world.insert(ids[0], Children(vec![ids[1], ids[3], Entity::from_raw_parts(u32::MAX, u32::MAX)])).unwrap();
+    world
+        .insert(
+            ids[0],
+            Children(vec![
+                ids[1],
+                ids[3],
+                Entity::from_raw_parts(u32::MAX, u32::MAX),
+            ]),
+        )
+        .unwrap();
     let mut scratch = TransformPropagator::default();
     let stats = assert_parity(&mut world, &mut scratch);
     assert_eq!(stats.missing_child_transforms, 3);
     assert_eq!(world.get::<GlobalTransform>(ids[2]), Some(&sentinel));
-    assert_eq!(world.get::<GlobalTransform>(replacement), Some(&GlobalTransform(Transform::IDENTITY)));
+    assert_eq!(
+        world.get::<GlobalTransform>(replacement),
+        Some(&GlobalTransform(Transform::IDENTITY))
+    );
 }
 
 #[test]
@@ -135,7 +166,9 @@ fn absent_globals_are_inserted_and_unreachable_globals_are_preserved() {
         world.remove::<GlobalTransform>(*id).unwrap();
     }
     let orphan = world.spawn(Transform::IDENTITY);
-    world.insert(orphan, Parent(Entity::from_raw(u32::MAX))).unwrap();
+    world
+        .insert(orphan, Parent(Entity::from_raw(u32::MAX)))
+        .unwrap();
     let mut scratch = TransformPropagator::default();
     let stats = assert_parity(&mut world, &mut scratch);
     assert_eq!(stats.inserted_globals, 4);
@@ -159,7 +192,15 @@ fn local_edits_reparent_detach_and_slot_reuse_rebuild_every_call() {
     let replacement = world.spawn(Transform::from_translation(Vec3::new(-99.0, 0.0, 0.0)));
     assert_ne!(replacement, ids[3]);
     assert_parity(&mut world, &mut scratch);
-    assert_eq!(world.get::<GlobalTransform>(replacement).unwrap().0.translation.x, -99.0);
+    assert_eq!(
+        world
+            .get::<GlobalTransform>(replacement)
+            .unwrap()
+            .0
+            .translation
+            .x,
+        -99.0
+    );
     validate_hierarchy(&world).unwrap();
 }
 
@@ -184,11 +225,16 @@ fn world_replacement_empty_world_and_release_do_not_leak_visited_state() {
 fn rotations_nonuniform_scales_and_signed_zero_preserve_exact_arithmetic() {
     let (mut world, ids) = fixture(Shape::Chain, 12).unwrap();
     for (index, id) in ids.iter().enumerate() {
-        world.insert(*id, Transform {
-            translation: Vec3::new(index as f32 * 0.25, -0.0, -0.125),
-            rotation: Quat::from_axis_angle(Vec3::X, index as f32 * 0.03),
-            scale: Vec3::new(1.5, -0.5, 0.75),
-        }).unwrap();
+        world
+            .insert(
+                *id,
+                Transform {
+                    translation: Vec3::new(index as f32 * 0.25, -0.0, -0.125),
+                    rotation: Quat::from_axis_angle(Vec3::X, index as f32 * 0.03),
+                    scale: Vec3::new(1.5, -0.5, 0.75),
+                },
+            )
+            .unwrap();
     }
     assert_parity(&mut world, &mut TransformPropagator::default());
 }
@@ -196,7 +242,10 @@ fn rotations_nonuniform_scales_and_signed_zero_preserve_exact_arithmetic() {
 #[test]
 fn existing_nonfinite_behavior_is_not_silently_sanitized() {
     let (mut world, ids) = fixture(Shape::Independent, 4).unwrap();
-    for (id, value) in ids.into_iter().zip([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0]) {
+    for (id, value) in ids
+        .into_iter()
+        .zip([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0])
+    {
         world.get_mut::<Transform>(id).unwrap().translation.x = value;
     }
     assert_parity(&mut world, &mut TransformPropagator::default());
