@@ -62,7 +62,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: stable
+          components: rustfmt, clippy
+      - name: Formatting Check
+        run: cargo fmt --all -- --check
       - name: Cargo Check
         run: cargo check --workspace --all-targets --locked
+      - name: Editor Clippy Lints
+        run: cargo clippy -p extrem_editor --all-targets --locked -- -D warnings
       - name: Editor Transaction Tests
         run: cargo test -p extrem_editor --locked
