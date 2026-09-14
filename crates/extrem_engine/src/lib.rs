@@ -6,7 +6,6 @@ use extrem_math::Transform;
 use extrem_render::{
     FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
 };
-use extrem_scene::propagate_transforms;
 
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
@@ -18,7 +17,8 @@ pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
     Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
-    SceneFormatError, SceneNode, Velocity, Visibility,
+    SceneFormatError, SceneNode, TransformPropagationStats, TransformPropagator, Velocity,
+    Visibility,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
@@ -139,10 +139,19 @@ impl<R: RenderBackend> Engine<R> {
         let mut app = App::new();
         app.add_plugin(MinimalPlugins);
         app.add_plugin(extrem_physics::PhysicsPlugin);
+        let mut propagator = TransformPropagator::default();
+        app.world_mut()
+            .insert_resource(TransformPropagationStats::default());
         app.set_fixed_timestep(config.fixed_delta_seconds)
             .set_max_fixed_steps_per_frame(config.max_fixed_steps_per_frame)
-            .add_systems(extrem_app::Stage::PostUpdate, |world, _| {
-                propagate_transforms(world)
+            .add_systems(extrem_app::Stage::PostUpdate, move |world, _| {
+                let report = propagator.propagate(world);
+                if let Some(stats) = world.get_resource_mut::<TransformPropagationStats>() {
+                    *stats = report;
+                } else {
+                    // App permits replacing its World. Recreate diagnostics, not cached transforms.
+                    world.insert_resource(report);
+                }
             });
         app.world_mut().insert_resource(Input::default());
 
