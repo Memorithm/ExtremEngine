@@ -64,3 +64,5 @@ jobs:
           toolchain: stable
       - name: Cargo Check
         run: cargo check --workspace --all-targets --locked
+      - name: Editor Transaction Tests
+        run: cargo test -p extrem_editor --locked
