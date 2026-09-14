@@ -7,7 +7,7 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 - `extrem_ecs` : entités générationnelles, composants, ressources et monde. Les slots sont retirés avant wrap de génération.
 - `extrem_math` : `Vec3`, `Quat`, `Mat4` et `Transform`; produit de Hamilton, composition TRS et projection WebGPU `z ∈ [0,1]` sont testés.
 - `extrem_scene` : hiérarchie parent/enfant, validation bidirectionnelle, traversal bornée contre les cycles corrompus, caméras et documents RON validés.
-- `extrem_editor` : transactions `CommandRecord`, undo/redo et inspection.
+- `extrem_editor` : historique borné, undo/redo exact et conservé sur erreur, validation des translations et suppression de sous-arbres validés (irréversible, avec remise à zéro de l'historique). Voir `docs/EDITOR.md`.
 - `extrem_assets` : clés de chemins virtuels validées en mode fail-closed, détection de collisions et handles typés.
 - `extrem_app` : stages, fixed timestep borné, signalement de dette de simulation abandonnée et assainissement du temps non fini.
 - `extrem_input` : clavier, souris et transitions de boutons.
@@ -30,11 +30,12 @@ cargo test --workspace --all-targets --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
-La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation sur GPU réel doit être qualifiée séparément.
+La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Les jobs Windows/macOS exécutent aussi les tests transactionnels de l'éditeur. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation sur GPU réel doit être qualifiée séparément.
 
 ## Documentation
 
 - `docs/ARCHITECTURE.md`
 - `docs/TRANSFORMS.md`
 - `docs/ANIMATION.md`
+- `docs/EDITOR.md`
 - `docs/SECURITY.md`
