@@ -192,7 +192,10 @@ fn stale_history_cannot_mutate_a_reused_entity_slot() {
     for _ in 0..2 {
         assert!(editor.undo(&mut world).is_err());
         assert_eq!((editor.undo_len(), editor.redo_len()), (1, 0));
-        assert_eq!(world.get::<Transform>(replacement).unwrap().translation.x, 7.0);
+        assert_eq!(
+            world.get::<Transform>(replacement).unwrap().translation.x,
+            7.0
+        );
     }
     editor.clear_history();
     assert!(!editor.undo(&mut world).unwrap());
@@ -260,7 +263,12 @@ fn non_finite_existing_translation_is_rejected_before_recording() {
     let mut world = World::new();
     let entity = world.spawn(Transform::from_translation(Vec3::new(f32::NAN, 0.0, 0.0)));
     let mut editor = EditorState::default();
-    let before_bits = world.get::<Transform>(entity).unwrap().translation.x.to_bits();
+    let before_bits = world
+        .get::<Transform>(entity)
+        .unwrap()
+        .translation
+        .x
+        .to_bits();
     assert!(matches!(
         editor.apply(
             &mut world,
@@ -272,7 +280,12 @@ fn non_finite_existing_translation_is_rejected_before_recording() {
         Err(EditorError::NonFiniteTranslation(invalid)) if invalid == entity
     ));
     assert_eq!(
-        world.get::<Transform>(entity).unwrap().translation.x.to_bits(),
+        world
+            .get::<Transform>(entity)
+            .unwrap()
+            .translation
+            .x
+            .to_bits(),
         before_bits
     );
     assert_eq!((editor.undo_len(), editor.redo_len()), (0, 0));

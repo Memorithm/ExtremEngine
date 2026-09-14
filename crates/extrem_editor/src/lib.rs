@@ -8,11 +8,23 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorCommand {
     Select(Entity),
-    Rename { entity: Entity, name: String },
-    Translate { entity: Entity, delta: Vec3 },
+    Rename {
+        entity: Entity,
+        name: String,
+    },
+    Translate {
+        entity: Entity,
+        delta: Vec3,
+    },
     /// Assigns an absolute position; also used for exact history replay.
-    SetTranslation { entity: Entity, translation: Vec3 },
-    SetVisible { entity: Entity, visible: bool },
+    SetTranslation {
+        entity: Entity,
+        translation: Vec3,
+    },
+    SetVisible {
+        entity: Entity,
+        visible: bool,
+    },
     /// Removes the component instead of replacing absence with `Visibility(true)`.
     RemoveVisibility(Entity),
     /// Deletes a validated subtree. Successful deletion clears both history stacks.
