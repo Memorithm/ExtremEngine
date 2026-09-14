@@ -12,7 +12,9 @@ fn from_parents(parents: &[Option<usize>]) -> (World, Vec<Entity>) {
     let mut children = vec![Vec::new(); parents.len()];
     for (child, parent) in parents.iter().enumerate() {
         if let Some(parent) = parent {
-            world.insert(entities[child], Parent(entities[*parent])).unwrap();
+            world
+                .insert(entities[child], Parent(entities[*parent]))
+                .unwrap();
             children[*parent].push(entities[child]);
         }
     }
@@ -92,8 +94,14 @@ fn wide_tree_checks_each_child_link_once() {
 fn empty_world_and_isolated_roots_are_valid() {
     let mut validator = HierarchyValidator::default();
     let (world, _) = from_parents(&[None; 8]);
-    assert_eq!(validator.validate(&world).unwrap(), HierarchyValidationStats::default());
-    assert_eq!(validator.validate(&World::new()).unwrap(), HierarchyValidationStats::default());
+    assert_eq!(
+        validator.validate(&world).unwrap(),
+        HierarchyValidationStats::default()
+    );
+    assert_eq!(
+        validator.validate(&World::new()).unwrap(),
+        HierarchyValidationStats::default()
+    );
 }
 
 #[test]
@@ -135,7 +143,9 @@ fn stale_parent_generation_cannot_be_replaced_by_live_slot() {
     let replacement = world.spawn_empty();
     assert_eq!(replacement.index(), entities[0].index());
     assert_ne!(replacement, entities[0]);
-    world.insert(replacement, Children(vec![entities[1]])).unwrap();
+    world
+        .insert(replacement, Children(vec![entities[1]]))
+        .unwrap();
     assert!(validate_hierarchy(&world).is_err());
 }
 
@@ -145,11 +155,16 @@ fn stale_child_and_extreme_raw_ids_are_rejected() {
     world.despawn(entities[1]).unwrap();
     assert!(validate_hierarchy(&world).is_err());
     world
-        .insert(entities[0], Children(vec![Entity::from_raw_parts(u32::MAX, u32::MAX)]))
+        .insert(
+            entities[0],
+            Children(vec![Entity::from_raw_parts(u32::MAX, u32::MAX)]),
+        )
         .unwrap();
     assert!(validate_hierarchy(&world).is_err());
     world.insert(entities[0], Children::default()).unwrap();
-    world.insert(entities[0], Parent(Entity::from_raw(u32::MAX))).unwrap();
+    world
+        .insert(entities[0], Parent(Entity::from_raw(u32::MAX)))
+        .unwrap();
     assert!(validate_hierarchy(&world).is_err());
 }
 

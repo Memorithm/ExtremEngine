@@ -81,7 +81,11 @@ impl HierarchyValidator {
                 if !world.contains(*child) {
                     return Err(WorldError::EntityNotFound(*child).into());
                 }
-                if !self.links.get(child).is_some_and(|link| link.parent == parent) {
+                if self
+                    .links
+                    .get(child)
+                    .is_none_or(|link| link.parent != parent)
+                {
                     return Err(HierarchyError::InconsistentState(format!(
                         "{parent} references {child}, but the child's Parent component disagrees"
                     )));

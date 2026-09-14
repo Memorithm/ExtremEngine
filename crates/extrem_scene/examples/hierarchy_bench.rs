@@ -97,10 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     measurements[implementation].push(elapsed);
                 }
             }
-            for (name, mut samples) in ["legacy", "fresh", "reused"]
-                .into_iter()
-                .zip(measurements)
-            {
+            for (name, mut samples) in ["legacy", "fresh", "reused"].into_iter().zip(measurements) {
                 for (sample, elapsed) in samples.iter().enumerate() {
                     println!("raw,{},{nodes},{name},{sample},{elapsed}", shape.name());
                 }
