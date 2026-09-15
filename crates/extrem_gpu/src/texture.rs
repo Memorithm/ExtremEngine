@@ -142,7 +142,8 @@ impl TextureData {
 
 fn nearest_coordinate(value: f32, extent: u32) -> u32 {
     let last = extent - 1;
-    (value.clamp(0.0, 1.0) * last as f32).round() as u32
+    let coordinate = (value.clamp(0.0, 1.0) * extent as f32).floor() as u32;
+    coordinate.min(last)
 }
 
 fn srgb_to_linear(value: f32) -> f32 {
@@ -193,8 +194,11 @@ impl MeshMaterial {
             Some(texture) => texture.sample_linear_nearest_clamp(uv)?,
             None => [1.0; 4],
         };
-        Ok(std::array::from_fn(|axis| {
-            (texel[axis] * self.base_color[axis]).clamp(0.0, 1.0)
-        }))
+        let mut result = [0.0; 4];
+        for axis in 0..3 {
+            result[axis] = (texel[axis] * self.base_color[axis]).clamp(0.0, 1.0);
+        }
+        result[3] = 1.0;
+        Ok(result)
     }
 }
