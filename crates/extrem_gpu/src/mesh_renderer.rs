@@ -15,7 +15,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const INSTANCE_STRIDE: usize = 80;
 const FRAME_UNIFORM_BYTES: usize = 96;
 const IDENTITY: [f32; 16] = [
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
 /// Submission observations, not GPU elapsed time or completed-on-screen evidence.
@@ -407,14 +407,14 @@ impl MeshRenderer {
         }
         if let Some(texture) = surface_texture {
             self.context.queue().present(texture);
-            if status == Some(SurfaceFrameStatus::Suboptimal)
-                && let Some(surface) = &self.surface
-            {
-                let scope = GpuScopes::new(self.context.device());
-                surface.reconfigure(self.context.device());
-                if let Err(error) = scope.check() {
-                    self.has_frame = false;
-                    return Err(error);
+            if status == Some(SurfaceFrameStatus::Suboptimal) {
+                if let Some(surface) = &self.surface {
+                    let scope = GpuScopes::new(self.context.device());
+                    surface.reconfigure(self.context.device());
+                    if let Err(error) = scope.check() {
+                        self.has_frame = false;
+                        return Err(error);
+                    }
                 }
             }
         }
