@@ -39,7 +39,9 @@ fn legacy_order(graph: &RenderGraph) -> Result<Vec<RenderPassId>, RenderGraphErr
 fn all_65536_four_node_graphs_preserve_order_and_first_error() {
     for mask in 0..65_536_u32 {
         let mut graph = RenderGraph::new();
-        let ids: Vec<_> = (0..4).map(|index| graph.add_pass(index.to_string())).collect();
+        let ids: Vec<_> = (0..4)
+            .map(|index| graph.add_pass(index.to_string()))
+            .collect();
         for (from, &pass) in ids.iter().enumerate() {
             for (to, &dependency) in ids.iter().enumerate() {
                 if mask & (1 << (from * 4 + to)) != 0 {
@@ -49,7 +51,11 @@ fn all_65536_four_node_graphs_preserve_order_and_first_error() {
         }
         let expected = legacy_order(&graph);
         let result = graph.compile();
-        assert_eq!(result.as_ref().map(|p| &p.execution_order), expected.as_ref(), "{mask}");
+        assert_eq!(
+            result.as_ref().map(|p| &p.execution_order),
+            expected.as_ref(),
+            "{mask}"
+        );
         if result.is_err() {
             assert!(graph.cached_plan().is_none());
         }
@@ -120,7 +126,9 @@ fn missing_ids_do_not_mutate_dependencies_or_cache() {
 fn corrupted_stored_dependency_returns_error_without_partial_cache() {
     let mut graph = RenderGraph::new();
     let a = graph.add_pass("a");
-    graph.passes[a.0].dependencies.push(RenderPassId(usize::MAX));
+    graph.passes[a.0]
+        .dependencies
+        .push(RenderPassId(usize::MAX));
     assert_eq!(
         graph.compile(),
         Err(RenderGraphError::MissingPass(RenderPassId(usize::MAX)))
