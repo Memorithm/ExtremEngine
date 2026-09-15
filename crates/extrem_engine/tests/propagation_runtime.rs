@@ -25,14 +25,14 @@ fn runtime_reuses_scratch_and_propagates_update_before_render() {
             assert_eq!((stats.roots, stats.visited, stats.child_links), (1, 2, 1));
             assert_eq!(stats.first_write_error, None);
         });
-    engine.tick(0.0);
+    engine.tick(0.0).unwrap();
     let first = *engine
         .world()
         .get_resource::<TransformPropagationStats>()
         .unwrap();
     assert_eq!(first.inserted_globals, 2);
     for _ in 0..8 {
-        engine.tick(0.0);
+        engine.tick(0.0).unwrap();
         let stats = engine
             .world()
             .get_resource::<TransformPropagationStats>()
@@ -50,13 +50,13 @@ fn replacing_app_world_does_not_reuse_old_globals_or_entity_visits() {
     let old = engine
         .world_mut()
         .spawn(Transform::from_translation(Vec3::X));
-    engine.tick(0.0);
+    engine.tick(0.0).unwrap();
     engine.app_mut().world = World::new();
     let new = engine
         .world_mut()
         .spawn(Transform::from_translation(Vec3::new(33.0, 0.0, 0.0)));
     assert_eq!(old, new); // IDs are world-local; scratch must never treat them as cached results.
-    engine.tick(0.0);
+    engine.tick(0.0).unwrap();
     assert_eq!(
         engine
             .world()

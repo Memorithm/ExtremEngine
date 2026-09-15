@@ -100,6 +100,49 @@ impl RenderGraph {
         Ok(())
     }
 
+    /// Removes one dependency, allowing an invalid graph to be repaired in place.
+    ///
+    /// Returns false when both passes exist but the edge does not. Only an actual
+    /// removal invalidates the cached plan and advances the topology version.
+    ///
+    /// # Errors
+    /// Returns `MissingPass` without mutation if either ID is outside this graph.
+    /// IDs are graph-local indices; an equal in-range ID from another graph is not
+    /// distinguishable. Use IDs obtained from the graph being edited.
+    ///
+    /// # Examples
+    /// ```
+    /// use extrem_render::{RenderGraph, RenderGraphError};
+    /// let mut graph = RenderGraph::new();
+    /// let a = graph.add_pass("a");
+    /// graph.add_dependency(a, a)?;
+    /// assert!(matches!(graph.compile(), Err(RenderGraphError::Cycle(_))));
+    /// assert!(graph.remove_dependency(a, a)?);
+    /// assert_eq!(graph.compile()?.execution_order, vec![a]);
+    /// assert!(!graph.remove_dependency(a, a)?);
+    /// # Ok::<(), RenderGraphError>(())
+    /// ```
+    pub fn remove_dependency(
+        &mut self,
+        pass: RenderPassId,
+        dependency: RenderPassId,
+    ) -> Result<bool, RenderGraphError> {
+        if self.passes.get(pass.0).is_none() {
+            return Err(RenderGraphError::MissingPass(pass));
+        }
+        if self.passes.get(dependency.0).is_none() {
+            return Err(RenderGraphError::MissingPass(dependency));
+        }
+        match self.passes[pass.0].dependencies.binary_search(&dependency) {
+            Ok(index) => {
+                self.passes[pass.0].dependencies.remove(index);
+                self.invalidate();
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     pub fn pass_name(&self, pass: RenderPassId) -> Option<&str> {
         self.passes.get(pass.0).map(|pass| pass.name.as_str())
     }
@@ -108,6 +151,15 @@ impl RenderGraph {
         self.cached_plan.as_ref()
     }
 
+    /// Compiles in deterministic depth-first order without recursive stack growth.
+    ///
+    /// Only a fully successful plan is cached. Cached plans are still returned as
+    /// owned clones; this change does not introduce a borrowed-plan optimization.
+    ///
+    /// # Errors
+    /// Returns `Cycle` at the first active dependency encountered in traversal
+    /// order, or `MissingPass` for an out-of-range stored dependency. No partial
+    /// plan is published on error. Allocation failure is not intercepted.
     pub fn compile(&mut self) -> Result<CompiledRenderGraph, RenderGraphError> {
         if let Some(plan) = &self.cached_plan {
             if plan.version == self.version {
@@ -117,8 +169,31 @@ impl RenderGraph {
 
         let mut states = vec![0_u8; self.passes.len()];
         let mut order = Vec::with_capacity(self.passes.len());
+        let mut pending = Vec::new();
         for index in 0..self.passes.len() {
-            visit_pass(index, self, &mut states, &mut order)?;
+            if states[index] != 0 {
+                continue;
+            }
+            states[index] = 1;
+            pending.push((index, 0));
+            while let Some((current, next_dependency)) = pending.pop() {
+                let next = self.passes[current].dependencies.get(next_dependency);
+                if let Some(&dependency) = next {
+                    pending.push((current, next_dependency + 1));
+                    match states.get(dependency.0) {
+                        None => return Err(RenderGraphError::MissingPass(dependency)),
+                        Some(1) => return Err(RenderGraphError::Cycle(dependency)),
+                        Some(2) => {}
+                        Some(_) => {
+                            states[dependency.0] = 1;
+                            pending.push((dependency.0, 0));
+                        }
+                    }
+                } else {
+                    states[current] = 2;
+                    order.push(RenderPassId(current));
+                }
+            }
         }
         let plan = CompiledRenderGraph {
             version: self.version,
@@ -132,29 +207,6 @@ impl RenderGraph {
         self.version = self.version.wrapping_add(1);
         self.cached_plan = None;
     }
-}
-
-fn visit_pass(
-    index: usize,
-    graph: &RenderGraph,
-    states: &mut [u8],
-    order: &mut Vec<RenderPassId>,
-) -> Result<(), RenderGraphError> {
-    match states[index] {
-        1 => return Err(RenderGraphError::Cycle(RenderPassId(index))),
-        2 => return Ok(()),
-        _ => {}
-    }
-    states[index] = 1;
-    for dependency in &graph.passes[index].dependencies {
-        if graph.passes.get(dependency.0).is_none() {
-            return Err(RenderGraphError::MissingPass(*dependency));
-        }
-        visit_pass(dependency.0, graph, states, order)?;
-    }
-    states[index] = 2;
-    order.push(RenderPassId(index));
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -307,6 +359,9 @@ impl RenderBackend for CpuRenderer {
         self.last_stats
     }
 }
+
+#[cfg(test)]
+mod graph_tests;
 
 #[cfg(test)]
 mod tests {

@@ -210,7 +210,7 @@ fn actual_engine_submits_late_render_stage_edits_in_the_same_order() {
                 .x = time.frame as f32;
         });
     for _ in 0..4 {
-        engine.tick(0.0);
+        engine.tick(0.0).unwrap();
         let mut reference = Capture::default();
         legacy::legacy_submit(engine.world(), config.viewport_aspect, &mut reference);
         assert_eq!(
@@ -226,11 +226,11 @@ fn actual_engine_submits_late_render_stage_edits_in_the_same_order() {
 fn engine_can_release_extraction_scratch_after_replacing_its_world() {
     let mut engine = Engine::new();
     engine.app_mut().world = fixture(Profile::Global, 4096).unwrap().0;
-    engine.tick(0.0);
+    engine.tick(0.0).unwrap();
     assert!(engine.last_extraction_stats().scratch_capacity >= 4096);
     engine.app_mut().world = World::new();
     engine.release_render_scratch();
-    engine.tick(0.0);
+    engine.tick(0.0).unwrap();
     assert_eq!(
         engine.last_extraction_stats(),
         RenderExtractionStats::default()

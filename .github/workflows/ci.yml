@@ -49,6 +49,10 @@ jobs:
         run: cargo check --workspace --all-targets --locked
       - name: Cargo Test
         run: cargo test --workspace --all-targets --locked
+      - name: Frame and Graph Doctests
+        run: cargo test -p extrem_engine -p extrem_render --doc --locked
+      - name: Fallible Headless Sandbox
+        run: cargo run -p extrem_engine --example sandbox --locked
 
   platform-check:
     name: Native Compile (${{ matrix.os }})
@@ -71,3 +75,5 @@ jobs:
         run: cargo clippy -p extrem_editor --all-targets --locked -- -D warnings
       - name: Editor Transaction Tests
         run: cargo test -p extrem_editor --locked
+      - name: Frame and Graph Recovery Tests
+        run: cargo test -p extrem_engine -p extrem_render --all-targets --locked
