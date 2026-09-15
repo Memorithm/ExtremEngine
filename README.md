@@ -13,13 +13,13 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 - `extrem_input` : clavier, souris et transitions de boutons.
 - `extrem_window` : boucle `winit`; les événements natifs sont effectivement injectés dans l'état `Input` avant chaque callback de frame.
 - `extrem_gpu` : contexte `wgpu`, surface de fenêtre avec gestion explicite des états d'acquisition et `WgpuPresenter` qui valide un chemin réel shader → render pass → draw → present.
-- `extrem_render` : contrat de backend, renderer nul/CPU et render graph persistant avec plan topologique mis en cache.
+- `extrem_render` : contrat de backend, renderer nul/CPU et render graph persistant, compilation itérative avec cache de plan et suppression de dépendances pour réparation.
 - `extrem_web` : détection et validation des capacités d'exécution Web/WebGPU en contexte sécurisé.
 - `extrem_animation` : squelette, clips validés, sampling, nlerp/slerp, blending de poses, palette LBS et contrats transactionnels EEFP/VPAE expérimentaux.
 - `extrem_physics` : **solveur de référence minimal** (gravité + sol + box), avec validation des données. Ce n'est pas encore un solveur rigid-body général.
 - `extrem_science` : Euler/RK4 avec validation numérique et workspace RK4 réutilisable.
 - `extrem_audio` : contrat de commandes/backend audio et backend nul; sortie audio de production encore à implémenter.
-- `extrem_engine` : façade haut niveau, propagation réutilisable intégrée à PostUpdate, extraction triée avec buffer compact réutilisable et calcul de la seule caméra sélectionnée, statistiques, render graph persistant et adaptateur `WgpuRenderer` vers le presenter GPU de validation.
+- `extrem_engine` : façade haut niveau, propagation réutilisable intégrée à PostUpdate, extraction triée avec buffer compact réutilisable et calcul de la seule caméra sélectionnée, statistiques, frame fallible après validation du render graph et adaptateur `WgpuRenderer` vers le presenter GPU de validation.
 
 ## Programme de performance
 
@@ -29,17 +29,24 @@ Les workflows `Scene Performance` et `Render Extraction Performance` conservent 
 
 Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions éventuelles et leurs limites doivent être évalués à partir des sorties effectivement produites.
 
+## Erreurs de frame et migration d'API
+
+`Engine::tick(delta)` retourne maintenant `Result<UpdateReport, RenderGraphError>` et `Engine::run_for(n)` retourne `Result<Vec<UpdateReport>, RenderGraphError>`. Les appels doivent traiter le résultat, par exemple avec `?`. Un graphe invalide est rejeté avant la simulation et avant tout appel au backend : les entrées et les observations de la dernière frame réussie sont conservées. `RenderGraph::remove_dependency` permet de réparer une dépendance puis de réessayer. La compilation ne dépend plus d'un parcours récursif de profondeur non bornée.
+
+Cette protection concerne les erreurs retournées par le graphe, pas les panics des systèmes utilisateurs, les erreurs d'allocation ou toutes les erreurs GPU. Le contrat complet et les exemples de migration sont dans `docs/RENDER_GRAPH.md`.
+
 ## Validation
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --all-targets --locked
-cargo test -p extrem_engine --doc --locked
+cargo test -p extrem_engine -p extrem_render --doc --locked
+cargo run -p extrem_engine --example sandbox --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
-La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Les jobs Windows/macOS exécutent aussi les tests transactionnels de l'éditeur. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation sur GPU réel doit être qualifiée séparément.
+La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Les jobs Windows/macOS exécutent aussi les tests de l'éditeur, du moteur et du render graph. Linux exécute les exemples de documentation et le sandbox sans fenêtre. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation sur GPU réel doit être qualifiée séparément.
 
 ## Documentation
 
@@ -49,4 +56,5 @@ La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, W
 - `docs/EDITOR.md`
 - `docs/PERFORMANCE.md`
 - `docs/RENDER_EXTRACTION.md`
+- `docs/RENDER_GRAPH.md`
 - `docs/SECURITY.md`

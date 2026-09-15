@@ -41,9 +41,10 @@ The following existing semantics are deliberately preserved:
 - Do not begin/end a frame inside the extractor: Engine retains that lifecycle.
 
 This is not mesh/material rendering, culling, instancing, GPU upload or a full-frame
-optimization claim. The mutable render graph can still fail in the existing tick
-path, which remains a separately tracked correctness increment. Pass-name strings
-and the graph's owned compiled-plan clone also remain outside this slice.
+optimization claim. The subsequent graph-recovery increment now makes tick fallible
+and rejects invalid graphs before simulation/backend effects; see `RENDER_GRAPH.md`
+for the Result API and repair contract. Pass-name strings and the graph's owned
+compiled-plan clone remain outside the extraction optimization.
 
 ## Validation and reproduction
 
@@ -85,11 +86,12 @@ are retained; the new workflow additionally checks runtime parity and doctests.
 
 ## Next checkpoints
 
-1. Repair the publicly mutable render graph's panic/error contract independently,
-   including the frame lifecycle on a failed compile and recovery after repair.
-2. Measure render-pass-name and compiled-plan copies, checking graph replacement
+The previously listed graph panic/error checkpoint is implemented separately;
+`RENDER_GRAPH.md` specifies rejected-frame behavior and recovery tests.
+
+1. Measure render-pass-name and compiled-plan copies, checking graph replacement
    and version invalidation before attempting a cache optimization.
-3. Implement actual world mesh rendering in the existing GPU authority, followed
+2. Implement actual world mesh rendering in the existing GPU authority, followed
    by measured culling/batching/instancing. Do not confuse these markers with a
    completed game renderer or use LOD/DRS to hide correctness defects.
 

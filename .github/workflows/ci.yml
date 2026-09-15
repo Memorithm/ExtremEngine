@@ -51,6 +51,8 @@ jobs:
         run: cargo test --workspace --all-targets --locked
       - name: Frame and Graph Doctests
         run: cargo test -p extrem_engine -p extrem_render --doc --locked
+      - name: Fallible Headless Sandbox
+        run: cargo run -p extrem_engine --example sandbox --locked
 
   platform-check:
     name: Native Compile (${{ matrix.os }})
