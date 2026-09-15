@@ -1,0 +1,101 @@
+name: Render Graph Performance
+
+on:
+  push:
+    branches: [main, "agent/**"]
+    paths:
+      - "crates/extrem_render/**"
+      - "crates/extrem_engine/**"
+      - "crates/extrem_app/**"
+      - "crates/extrem_scene/**"
+      - "crates/extrem_ecs/**"
+      - "crates/extrem_math/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/graph-performance.yml"
+  pull_request:
+    paths:
+      - "crates/extrem_render/**"
+      - "crates/extrem_engine/**"
+      - "crates/extrem_app/**"
+      - "crates/extrem_scene/**"
+      - "crates/extrem_ecs/**"
+      - "crates/extrem_math/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/graph-performance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-graph-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    name: Render graph parity and headless CPU evidence
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Engine and render contracts
+        run: cargo test -p extrem_engine -p extrem_render --all-targets --locked
+      - name: Documentation examples
+        run: cargo test -p extrem_engine -p extrem_render --doc --locked
+      - name: Engine and render lints
+        run: cargo clippy -p extrem_engine -p extrem_render --all-targets --locked -- -D warnings
+      - name: Build actual old and new engine with identical harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=6a2d459b32275b3742e56e16bceb638cba995ff3
+          mkdir -p evidence
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            cargo --version
+            uname -a
+            sysctl -n machdep.cpu.brand_string
+            sysctl -n hw.ncpu
+            sysctl -n hw.memsize
+            printf 'RUNNER_OS=%s\nRUNNER_ARCH=%s\nRUSTFLAGS=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "${RUSTFLAGS-}"
+          } > evidence/environment.txt
+          git fetch --depth=1 origin "$baseline"
+          git worktree add --detach "$RUNNER_TEMP/ee-graph-before" "$baseline"
+          cp crates/extrem_engine/examples/graph_frame_bench.rs "$RUNNER_TEMP/ee-graph-before/crates/extrem_engine/examples/graph_frame_bench.rs"
+          cmp crates/extrem_engine/examples/graph_frame_bench.rs "$RUNNER_TEMP/ee-graph-before/crates/extrem_engine/examples/graph_frame_bench.rs"
+          shasum -a 256 crates/extrem_engine/examples/graph_frame_bench.rs > evidence/harness-sha256.txt
+          git -C "$RUNNER_TEMP/ee-graph-before" status --short > evidence/baseline-overlay.txt
+          cargo build --release -p extrem_engine --example graph_frame_bench --locked --target-dir "$RUNNER_TEMP/ee-graph-target"
+          cp "$RUNNER_TEMP/ee-graph-target/release/examples/graph_frame_bench" "$RUNNER_TEMP/ee-graph-after"
+          cargo build --release --manifest-path "$RUNNER_TEMP/ee-graph-before/Cargo.toml" -p extrem_engine --example graph_frame_bench --locked --target-dir "$RUNNER_TEMP/ee-graph-target"
+          cp "$RUNNER_TEMP/ee-graph-target/release/examples/graph_frame_bench" "$RUNNER_TEMP/ee-graph-baseline"
+          shasum -a 256 "$RUNNER_TEMP/ee-graph-after" "$RUNNER_TEMP/ee-graph-baseline" > evidence/binary-sha256.txt
+      - name: Alternating baseline and candidate campaigns
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=6a2d459b32275b3742e56e16bceb638cba995ff3
+          candidate="$(git rev-parse HEAD)"
+          EXTREM_BENCH_REVISION="$baseline" "$RUNNER_TEMP/ee-graph-baseline" > evidence/before-0.csv
+          EXTREM_BENCH_REVISION="$candidate" "$RUNNER_TEMP/ee-graph-after" > evidence/after-0.csv
+          EXTREM_BENCH_REVISION="$candidate" "$RUNNER_TEMP/ee-graph-after" > evidence/after-1.csv
+          EXTREM_BENCH_REVISION="$baseline" "$RUNNER_TEMP/ee-graph-baseline" > evidence/before-1.csv
+          cat evidence/environment.txt
+          grep '^summary,' evidence/*.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: render-graph-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90
