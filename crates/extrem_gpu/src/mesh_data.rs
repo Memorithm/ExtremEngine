@@ -42,6 +42,7 @@ impl Default for MeshLight {
 
 impl MeshLight {
     pub fn validate(self) -> Result<Self, MeshError> {
+        let direction_length_squared = length_squared(self.direction_to_light);
         if !self
             .direction_to_light
             .iter()
@@ -53,7 +54,8 @@ impl MeshLight {
             || self.intensity > MAX_LIGHT_INTENSITY
             || !(0.0..=1.0).contains(&self.ambient)
             || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
-            || length_squared(self.direction_to_light) <= f32::EPSILON
+            || !direction_length_squared.is_finite()
+            || direction_length_squared <= f32::EPSILON
         {
             return Err(MeshError::InvalidLight);
         }
@@ -256,7 +258,7 @@ fn normalize_normal(normal: [f32; 3]) -> Result<[f32; 3], MeshError> {
         return Err(MeshError::InvalidNormal);
     }
     let length_squared = length_squared(normal);
-    if length_squared <= f32::EPSILON {
+    if !length_squared.is_finite() || length_squared <= f32::EPSILON {
         return Err(MeshError::InvalidNormal);
     }
     let inverse = length_squared.sqrt().recip();
@@ -466,6 +468,30 @@ mod bound_tests {
         assert_eq!(
             validate_frame(&identity(), &[item]),
             Err(MeshError::InvalidMatrix)
+        );
+    }
+
+    #[test]
+    fn overflowing_finite_normal_and_light_directions_are_rejected() {
+        let vertices = vec![MeshVertex {
+            position: [0.0; 3],
+            color: [1.0; 3],
+        }];
+        assert!(matches!(
+            MeshData::new_with_normals(vertices, vec![[f32::MAX, 0.0, 0.0]], vec![0, 0, 0]),
+            Err(MeshError::InvalidNormal)
+        ));
+
+        let light = MeshLight {
+            direction_to_light: [f32::MAX, 0.0, 0.0],
+            color: [1.0; 3],
+            intensity: 1.0,
+            ambient: 0.0,
+        };
+        assert_eq!(light.validate(), Err(MeshError::InvalidLight));
+        assert_eq!(
+            shade_lambert([1.0; 3], [0.0, 0.0, 1.0], light),
+            Err(MeshError::InvalidLight)
         );
     }
 
