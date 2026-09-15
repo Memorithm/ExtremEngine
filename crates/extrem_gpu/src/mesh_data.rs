@@ -52,7 +52,10 @@ impl MeshLight {
             || self.intensity < 0.0
             || self.intensity > MAX_LIGHT_INTENSITY
             || !(0.0..=1.0).contains(&self.ambient)
-            || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
+            || self
+                .color
+                .iter()
+                .any(|value| !(0.0..=1.0).contains(value))
             || length_squared(self.direction_to_light) <= f32::EPSILON
         {
             return Err(MeshError::InvalidLight);
@@ -236,10 +239,8 @@ fn generate_normals(vertices: &[MeshVertex], indices: &[u32]) -> Vec<[f32; 3]> {
     accumulated
         .into_iter()
         .map(|normal| {
-            let length = (normal[0] * normal[0]
-                + normal[1] * normal[1]
-                + normal[2] * normal[2])
-                .sqrt();
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
             if length.is_finite() && length > 0.0 {
                 [
                     (normal[0] / length) as f32,
@@ -303,11 +304,7 @@ pub fn validate_normal_transform(model: &[f32; 16]) -> Result<(), MeshError> {
     let c1 = [model[4], model[5], model[6]];
     let c2 = [model[8], model[9], model[10]];
     let cofactors = [cross(c1, c2), cross(c2, c0), cross(c0, c1)];
-    if cofactors
-        .iter()
-        .flatten()
-        .any(|value| !value.is_finite())
-    {
+    if cofactors.iter().flatten().any(|value| !value.is_finite()) {
         return Err(MeshError::InvalidNormalTransform);
     }
     let determinant = dot(c0, cofactors[0]);
