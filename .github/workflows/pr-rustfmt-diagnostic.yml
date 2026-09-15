@@ -1,0 +1,30 @@
+name: PR rustfmt diagnostic
+
+on:
+  pull_request:
+    branches: [agent/initial-engine]
+
+permissions:
+  contents: read
+
+jobs:
+  rustfmt-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Produce rustfmt patch
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff -- crates/extrem_gpu/src/mesh_renderer.rs > rustfmt.patch
+          test -s rustfmt.patch
+      - name: Upload rustfmt patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: extremengine-instancing-rustfmt-${{ github.event.pull_request.head.sha }}
+          path: rustfmt.patch
+          if-no-files-found: error
+          retention-days: 1
