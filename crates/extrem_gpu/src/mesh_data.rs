@@ -52,10 +52,7 @@ impl MeshLight {
             || self.intensity < 0.0
             || self.intensity > MAX_LIGHT_INTENSITY
             || !(0.0..=1.0).contains(&self.ambient)
-            || self
-                .color
-                .iter()
-                .any(|value| !(0.0..=1.0).contains(value))
+            || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
             || length_squared(self.direction_to_light) <= f32::EPSILON
         {
             return Err(MeshError::InvalidLight);
