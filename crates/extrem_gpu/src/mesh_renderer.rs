@@ -526,12 +526,7 @@ fn target(
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> UploadedMesh {
     let mut vertices = Vec::with_capacity(source.vertices().len() * 36);
     for (vertex, normal) in source.vertices().iter().zip(source.normals()) {
-        for value in vertex
-            .position
-            .iter()
-            .chain(&vertex.color)
-            .chain(normal)
-        {
+        for value in vertex.position.iter().chain(&vertex.color).chain(normal) {
             vertices.extend_from_slice(&value.to_le_bytes());
         }
     }
