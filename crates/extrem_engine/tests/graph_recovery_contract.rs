@@ -1,6 +1,8 @@
 use extrem_engine::{Engine, EngineConfig, Input, KeyCode, RenderGraphError, Stage, Time};
 use extrem_math::Transform;
-use extrem_render::{FrameInfo, FrameStats, RenderBackend, RenderCommand, RenderGraph, RenderPassId};
+use extrem_render::{
+    FrameInfo, FrameStats, RenderBackend, RenderCommand, RenderGraph, RenderPassId,
+};
 use extrem_scene::{GlobalTransform, TransformPropagationStats};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -66,26 +68,55 @@ fn rejection_preserves_every_stage_input_time_and_world_before_startup() {
     engine.set_input_snapshot(&input);
     let initial_time = engine.app().time();
     let initial_extraction = engine.last_extraction_stats();
-    let initial_propagation = *engine.world().get_resource::<TransformPropagationStats>().unwrap();
+    let initial_propagation = *engine
+        .world()
+        .get_resource::<TransformPropagationStats>()
+        .unwrap();
     let bad = corrupt(&mut engine);
     for delta in [0.0, 0.25, f32::INFINITY] {
         assert_eq!(engine.tick(delta), Err(RenderGraphError::Cycle(bad)));
         assert_eq!(engine.app().time(), initial_time);
         assert_eq!(engine.world().get_resource::<Time>(), Some(&initial_time));
         assert_eq!(engine.world().get_resource::<[u32; 5]>(), Some(&[0; 5]));
-        assert_eq!(engine.world().get::<Transform>(entity), Some(&Transform::IDENTITY));
+        assert_eq!(
+            engine.world().get::<Transform>(entity),
+            Some(&Transform::IDENTITY)
+        );
         assert!(engine.world().get::<GlobalTransform>(entity).is_none());
-        assert!(engine.world().get_resource::<Input>().unwrap().keys.just_pressed(KeyCode::Space));
+        assert!(
+            engine
+                .world()
+                .get_resource::<Input>()
+                .unwrap()
+                .keys
+                .just_pressed(KeyCode::Space)
+        );
         assert_eq!(engine.renderer(), &Probe::default());
         assert_eq!(engine.last_extraction_stats(), initial_extraction);
-        assert_eq!(engine.world().get_resource::<TransformPropagationStats>(), Some(&initial_propagation));
+        assert_eq!(
+            engine.world().get_resource::<TransformPropagationStats>(),
+            Some(&initial_propagation)
+        );
     }
-    engine.render_graph_mut().remove_dependency(bad, bad).unwrap();
+    engine
+        .render_graph_mut()
+        .remove_dependency(bad, bad)
+        .unwrap();
     let report = engine.tick(0.25).unwrap();
     assert_eq!(report.frame, 1);
     assert_eq!(report.elapsed_seconds, 0.25);
-    assert_eq!(engine.world().get_resource::<[u32; 5]>(), Some(&[1, 8, 1, 1, 1]));
-    assert!(!engine.world().get_resource::<Input>().unwrap().keys.just_pressed(KeyCode::Space));
+    assert_eq!(
+        engine.world().get_resource::<[u32; 5]>(),
+        Some(&[1, 8, 1, 1, 1])
+    );
+    assert!(
+        !engine
+            .world()
+            .get_resource::<Input>()
+            .unwrap()
+            .keys
+            .just_pressed(KeyCode::Space)
+    );
     assert_eq!(engine.renderer().ended, 1);
     assert!(!engine.renderer().open);
 }
@@ -112,7 +143,10 @@ fn rejection_after_success_preserves_last_frame_and_retries_once_after_repair() 
         assert_eq!(engine.world().get::<GlobalTransform>(entity), Some(&global));
         assert!(engine.render_graph().cached_plan().is_none());
     }
-    engine.render_graph_mut().remove_dependency(bad, bad).unwrap();
+    engine
+        .render_graph_mut()
+        .remove_dependency(bad, bad)
+        .unwrap();
     let report = engine.tick(0.125).unwrap();
     assert_eq!((report.frame, report.elapsed_seconds), (2, 0.25));
     assert_eq!(engine.renderer().ended, 2);
@@ -136,7 +170,10 @@ fn replacing_graph_with_equal_version_does_not_bypass_validation() {
     assert_eq!(engine.renderer(), &previous);
     engine.render_graph_mut().remove_dependency(b, a).unwrap();
     assert_eq!(engine.tick(0.0).unwrap().frame, 2);
-    assert_eq!(engine.last_render_passes(), ["replacement-b", "replacement-a", "replacement-c"]);
+    assert_eq!(
+        engine.last_render_passes(),
+        ["replacement-b", "replacement-a", "replacement-c"]
+    );
 }
 
 #[test]
@@ -147,9 +184,18 @@ fn run_for_propagates_error_and_zero_frames_remains_a_noop() {
     assert_eq!(engine.run_for(3), Err(RenderGraphError::Cycle(bad)));
     assert_eq!(engine.app().time().frame, 0);
     assert_eq!(engine.renderer(), &Probe::default());
-    engine.render_graph_mut().remove_dependency(bad, bad).unwrap();
+    engine
+        .render_graph_mut()
+        .remove_dependency(bad, bad)
+        .unwrap();
     let reports = engine.run_for(3).unwrap();
-    assert_eq!(reports.iter().map(|report| report.frame).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert_eq!(
+        reports
+            .iter()
+            .map(|report| report.frame)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
     assert_eq!(engine.renderer().ended, 3);
     assert!(!engine.renderer().open);
 }
