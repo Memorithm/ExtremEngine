@@ -108,11 +108,7 @@ mod tests {
     #[test]
     fn rejects_missing_or_extra_coordinates() {
         let mesh = triangle();
-        for uv0 in [
-            vec![[0.0, 0.0]; 2],
-            vec![[0.0, 0.0]; 4],
-            Vec::new(),
-        ] {
+        for uv0 in [vec![[0.0, 0.0]; 2], vec![[0.0, 0.0]; 4], Vec::new()] {
             assert!(matches!(
                 TexturedGeometry::new(Arc::clone(&mesh), uv0),
                 Err(TextureError::InvalidUv)
