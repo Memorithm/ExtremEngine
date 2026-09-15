@@ -4,9 +4,20 @@ Status: **audit record only — no relicensing performed by this document**.
 
 This document records the current repository licensing surfaces that must be reconciled before ExtremEngine can be aligned with the Memorithm/SciRust PolyForm Noncommercial regime. It is an engineering/provenance record, not a legal determination.
 
+## Pinned audit provenance
+
+Audit date: **2026-09-15**.
+
+The licensing facts below were inspected against these exact repository revisions:
+
+- SciRust source-of-truth revision: `Memorithm/scirust@4e92a89b94e69d3c87571a9470c2b03da2ea5fd8` on its `master` default branch;
+- ExtremEngine audited trunk revision: `Memorithm/ExtremEngine@01ca5f482cad7a8d4543fb4c6a333ff7eae5c492` on its `agent/initial-engine` default branch.
+
+A later transition must refresh this audit if either repository has materially changed its licensing/provenance surfaces. Mutable branch names are context only; the SHAs above identify the evidence used by this record.
+
 ## Source of truth requested for Memorithm first-party code
 
-The organization-level convergence target is the regime actually present on the default branch of `Memorithm/scirust`:
+At the pinned SciRust revision above, the convergence target is:
 
 - PolyForm Noncommercial License 1.0.0;
 - SPDX identifier `PolyForm-Noncommercial-1.0.0`;
@@ -18,16 +29,16 @@ The complete license text, third-party notices, provenance, and any non-waivable
 
 ## ExtremEngine state observed on the authoritative trunk
 
-Authoritative trunk: `agent/initial-engine`.
+Authoritative trunk at audit time: `agent/initial-engine`, pinned above.
 
-At the time of this audit:
+At the pinned ExtremEngine revision:
 
 - workspace `Cargo.toml` declares `license = "MIT OR Apache-2.0"`;
 - the repository contains `LICENSE-MIT` with `Copyright (c) 2026 Memorithm` and an unrestricted MIT grant, including commercial use and sublicensing;
 - no root `LICENSE-APACHE` file was present in the root listing/search performed for this audit;
 - the repository does not currently expose the SciRust-style root `LICENSE`, `LICENSE.md`, and `LICENSING.md` PolyForm set.
 
-These facts mean the repository is **not converged** with SciRust today.
+These facts mean the audited revision is **not converged** with the pinned SciRust licensing regime.
 
 ## Why this audit does not rewrite the license
 
