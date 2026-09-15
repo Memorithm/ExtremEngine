@@ -26,6 +26,21 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Export temporary offline formatting diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dev-snapshot
+          git rev-parse HEAD > dev-snapshot/revision.txt
+          git archive HEAD | gzip > dev-snapshot/source.tar.gz
+          cp "$(rustup which rustfmt)" dev-snapshot/rustfmt
+          sha256sum dev-snapshot/rustfmt dev-snapshot/source.tar.gz > dev-snapshot/SHA256SUMS
+          ldd dev-snapshot/rustfmt > dev-snapshot/formatter-libraries.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mesh-dev-snapshot-${{ github.run_id }}
+          path: dev-snapshot/
+          retention-days: 1
       - name: CPU contracts and documentation
         run: |
           cargo test -p extrem_gpu -p extrem_engine --all-targets --locked
@@ -48,6 +63,7 @@ jobs:
             dpkg-query -W mesa-vulkan-drivers
           } > evidence/environment.txt
           cargo run -p extrem_engine --example mesh_qualification --locked -- evidence/mesh-depth.ppm | tee evidence/pixel-checks.txt
+          cargo run -p extrem_engine --example mesh_scene --locked -- --headless evidence/mesh-cubes.ppm | tee evidence/cube-scene.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mesh-qualification-${{ github.run_id }}-${{ github.run_attempt }}
