@@ -1,6 +1,10 @@
 use extrem_ecs::Entity;
 use extrem_math::{Mat4, Vec3};
 use std::fmt;
+use std::sync::Arc;
+
+mod preparation;
+pub use preparation::{RenderPlanPreparation, RenderPlanPreparationStats};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameInfo {
@@ -59,7 +63,7 @@ pub struct CompiledRenderGraph {
 pub struct RenderGraph {
     passes: Vec<RenderPass>,
     version: u64,
-    cached_plan: Option<CompiledRenderGraph>,
+    cached_plan: Option<Arc<CompiledRenderGraph>>,
 }
 
 impl RenderGraph {
@@ -148,25 +152,53 @@ impl RenderGraph {
     }
 
     pub fn cached_plan(&self) -> Option<&CompiledRenderGraph> {
-        self.cached_plan.as_ref()
+        self.cached_plan.as_deref()
     }
 
-    /// Compiles in deterministic depth-first order without recursive stack growth.
+    /// Returns an independently owned plan, preserving the original API.
     ///
-    /// Only a fully successful plan is cached. Cached plans are still returned as
-    /// owned clones; this change does not introduce a borrowed-plan optimization.
+    /// The execution-order vector is copied even on a cache hit. Use
+    /// `compile_shared` when retaining an immutable snapshot is sufficient.
     ///
     /// # Errors
-    /// Returns `Cycle` at the first active dependency encountered in traversal
-    /// order, or `MissingPass` for an out-of-range stored dependency. No partial
-    /// plan is published on error. Allocation failure is not intercepted.
+    /// Propagates the same cycle/missing-pass errors as `compile_shared`.
     pub fn compile(&mut self) -> Result<CompiledRenderGraph, RenderGraphError> {
+        self.compile_shared().map(|plan| (*plan).clone())
+    }
+
+    /// Compiles iteratively and returns a shared immutable plan snapshot.
+    ///
+    /// Cache hits clone an Arc, not the execution-order vector. Every actual
+    /// topology mutation invalidates the cache, including version wrap. Old
+    /// snapshots remain readable and do not validate a subsequently edited graph.
+    /// Graph clones can share a plan until either graph is changed. Returned
+    /// snapshots cannot mutate the cached plan: Arc::make_mut detaches a copy.
+    ///
+    /// # Errors
+    /// Returns the first Cycle or MissingPass in the existing DFS traversal order.
+    /// No partial plan is cached. Allocation failure is not intercepted.
+    ///
+    /// # Examples
+    /// ```
+    /// use extrem_render::{RenderGraph, RenderGraphError};
+    /// use std::sync::Arc;
+    /// let mut graph = RenderGraph::new();
+    /// let a = graph.add_pass("a");
+    /// let first = graph.compile_shared()?;
+    /// assert!(Arc::ptr_eq(&first, &graph.compile_shared()?));
+    /// graph.add_pass("b");
+    /// assert_eq!(first.execution_order, vec![a]);
+    /// assert!(!Arc::ptr_eq(&first, &graph.compile_shared()?));
+    /// # Ok::<(), RenderGraphError>(())
+    /// ```
+    pub fn compile_shared(&mut self) -> Result<Arc<CompiledRenderGraph>, RenderGraphError> {
         if let Some(plan) = &self.cached_plan {
             if plan.version == self.version {
-                return Ok(plan.clone());
+                return Ok(Arc::clone(plan));
             }
         }
-
+        // A stale internal cache is not a fallback if compilation fails.
+        self.cached_plan = None;
         let mut states = vec![0_u8; self.passes.len()];
         let mut order = Vec::with_capacity(self.passes.len());
         let mut pending = Vec::new();
@@ -195,11 +227,11 @@ impl RenderGraph {
                 }
             }
         }
-        let plan = CompiledRenderGraph {
+        let plan = Arc::new(CompiledRenderGraph {
             version: self.version,
             execution_order: order,
-        };
-        self.cached_plan = Some(plan.clone());
+        });
+        self.cached_plan = Some(Arc::clone(&plan));
         Ok(plan)
     }
 

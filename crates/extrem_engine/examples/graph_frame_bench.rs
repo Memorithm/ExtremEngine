@@ -37,9 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for entities in [0, 512] {
                 let mut engine = Engine::new();
                 for index in 0..entities {
-                    engine.world_mut().try_spawn(Transform::from_translation(Vec3::new(
-                        index as f32, 0.0, 0.0,
-                    )))?;
+                    engine
+                        .world_mut()
+                        .try_spawn(Transform::from_translation(Vec3::new(
+                            index as f32,
+                            0.0,
+                            0.0,
+                        )))?;
                 }
                 let (initial, mut expected) = graph(passes, 0)?;
                 *engine.render_graph_mut() = initial;
@@ -51,7 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if mode == "replaced" {
                             // Same topology version but different names: construction/replacement
                             // is outside timing; compile and derived-name refresh remain inside.
-                            let (replacement, names) = graph(passes, sample * ITERATIONS + iteration)?;
+                            let (replacement, names) =
+                                graph(passes, sample * ITERATIONS + iteration)?;
                             *engine.render_graph_mut() = replacement;
                             expected = names;
                         }
@@ -66,7 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if sample >= WARMUP {
                         let sample_id = sample - WARMUP;
-                        println!("raw,{mode},{passes},{entities},{sample_id},{ITERATIONS},{elapsed}");
+                        println!(
+                            "raw,{mode},{passes},{entities},{sample_id},{ITERATIONS},{elapsed}"
+                        );
                         samples.push(elapsed);
                     }
                 }

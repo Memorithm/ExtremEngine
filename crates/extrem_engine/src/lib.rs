@@ -3,9 +3,10 @@ pub use extraction::{RenderExtractionStats, RenderExtractor};
 
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
-pub use extrem_render::RenderGraphError;
+pub use extrem_render::{RenderGraphError, RenderPlanPreparationStats};
 use extrem_render::{
     FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
+    RenderPlanPreparation,
 };
 
 pub use extrem_app::{Stage, Time};
@@ -106,7 +107,8 @@ pub struct Engine<R: RenderBackend = NullRenderer> {
     config: EngineConfig,
     render_graph: RenderGraph,
     last_frame_stats: FrameStats,
-    last_render_passes: Vec<String>,
+    render_plan: RenderPlanPreparation,
+    last_plan_preparation_stats: RenderPlanPreparationStats,
     extractor: RenderExtractor,
     last_extraction_stats: RenderExtractionStats,
 }
@@ -164,7 +166,8 @@ impl<R: RenderBackend> Engine<R> {
             config,
             render_graph: default_render_graph(),
             last_frame_stats: FrameStats::default(),
-            last_render_passes: Vec::new(),
+            render_plan: RenderPlanPreparation::default(),
+            last_plan_preparation_stats: RenderPlanPreparationStats::default(),
             extractor: RenderExtractor::default(),
             last_extraction_stats: RenderExtractionStats::default(),
         }
@@ -233,19 +236,13 @@ impl<R: RenderBackend> Engine<R> {
     /// # Ok::<(), RenderGraphError>(())
     /// ```
     pub fn tick(&mut self, delta_seconds: f32) -> Result<UpdateReport, RenderGraphError> {
-        // Reject before simulation, input consumption, diagnostics or backend frame opening.
-        let compiled = self.render_graph.compile()?;
+        // Always validate the CURRENT graph, even when names from a previous frame exist.
+        let preparation = self.render_plan.prepare(&mut self.render_graph)?;
         let report = self.app.update(delta_seconds);
         self.renderer.begin_frame(FrameInfo {
             index: report.frame,
             delta_seconds: report.delta_seconds,
         });
-
-        self.last_render_passes = compiled
-            .execution_order
-            .iter()
-            .filter_map(|pass| self.render_graph.pass_name(*pass).map(str::to_owned))
-            .collect();
 
         self.last_extraction_stats = self.extractor.submit(
             self.app.world(),
@@ -254,6 +251,7 @@ impl<R: RenderBackend> Engine<R> {
         );
 
         self.last_frame_stats = self.renderer.end_frame();
+        self.last_plan_preparation_stats = preparation;
         if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
             input.end_frame();
         }
@@ -287,7 +285,15 @@ impl<R: RenderBackend> Engine<R> {
     }
 
     pub fn last_render_passes(&self) -> &[String] {
-        &self.last_render_passes
+        self.render_plan.pass_names()
+    }
+
+    /// Work observed during the last successful frame's plan preparation.
+    ///
+    /// A rejected frame leaves this value unchanged. Copied-name bytes are payload
+    /// bytes only; they are not allocator counts, RSS or a zero-allocation claim.
+    pub fn last_plan_preparation_stats(&self) -> RenderPlanPreparationStats {
+        self.last_plan_preparation_stats
     }
 
     /// Observations from the last completed extraction, initially empty.
