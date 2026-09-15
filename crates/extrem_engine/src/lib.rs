@@ -2,8 +2,8 @@ mod extraction;
 pub use extraction::{RenderExtractionStats, RenderExtractor};
 mod mesh;
 pub use mesh::{
-    MeshData, MeshError, MeshExtractionStats, MeshExtractor, MeshFrameReport, MeshInstance,
-    MeshVertex, WgpuMeshRenderer,
+    DirectionalLight, MeshData, MeshError, MeshExtractionStats, MeshExtractor, MeshFrameReport,
+    MeshInstance, MeshVertex, WgpuMeshRenderer,
 };
 
 use extrem_app::{App, MinimalPlugins, UpdateReport};

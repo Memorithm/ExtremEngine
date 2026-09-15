@@ -1,7 +1,7 @@
-//! Actual ECS cubes using the same mesh pipeline in a window or offscreen.
+//! Actual ECS cubes using the same lit mesh pipeline in a window or offscreen.
 use extrem_engine::{
-    Camera, Engine, EngineConfig, MeshData, MeshInstance, MeshVertex, Stage, WgpuMeshRenderer,
-    WindowConfig, WindowHost,
+    Camera, DirectionalLight, Engine, EngineConfig, MeshData, MeshInstance, MeshVertex, Stage,
+    WgpuMeshRenderer, WindowConfig, WindowHost,
 };
 use extrem_gpu::MeshRenderer;
 use extrem_math::{Quat, Transform, Vec3};
@@ -52,14 +52,12 @@ fn cube() -> Result<Arc<MeshData>, Box<dyn Error>> {
     ];
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for (face, positions) in faces.into_iter().enumerate() {
+    for positions in faces {
         let base = vertices.len() as u32;
-        // Deliberate vertex coloring, not a physical lighting claim.
-        let shade = [0.85, 0.65, 0.55, 0.75, 1.0, 0.45][face];
         for position in positions {
             vertices.push(MeshVertex {
                 position,
-                color: [shade; 3],
+                color: [1.0; 3],
             });
         }
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -98,6 +96,13 @@ fn scene(gpu: MeshRenderer, aspect: f32) -> Result<MeshEngine, Box<dyn Error>> {
             },
         )?;
     }
+    engine.world_mut().try_spawn(DirectionalLight {
+        active: true,
+        direction_to_light: Vec3::new(-0.45, 0.75, 0.65),
+        color: [1.0, 0.96, 0.90],
+        intensity: 0.9,
+        ambient: 0.14,
+    })?;
     let camera = engine.world_mut().try_spawn(Transform {
         translation: Vec3::new(0.0, 1.4, 5.0),
         rotation: Quat::from_euler(-0.20, 0.0, 0.0),
@@ -127,6 +132,7 @@ fn verify_frame(engine: &MeshEngine) -> Result<(), Box<dyn Error>> {
         .clone()?;
     if report.submitted {
         assert_eq!((report.draw_calls, report.triangles), (3, 36));
+        assert_eq!(engine.renderer().last_mesh_extraction().eligible_lights, 1);
     }
     Ok(())
 }
@@ -152,7 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ppm.extend_from_slice(&pixel[..3]);
         }
         std::fs::write(path, ppm)?;
-        println!("mesh_scene_passed: 3 instances, 36 triangles, nonwhite_pixels={changed}");
+        println!("mesh_scene_passed: 3 lit instances, 36 triangles, nonwhite_pixels={changed}");
         return Ok(());
     }
     let mut engine: Option<MeshEngine> = None;
@@ -160,7 +166,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut previous = Instant::now();
     WindowHost::run_with_input(
         WindowConfig {
-            title: "ExtremEngine — indexed world meshes".into(),
+            title: "ExtremEngine — lit indexed world meshes".into(),
             width: 960,
             height: 640,
         },
