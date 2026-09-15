@@ -52,9 +52,18 @@ fn rgba8_extent_and_payload_must_match_exactly() {
 #[test]
 fn nearest_clamp_sampling_has_explicit_top_left_uv_contract() {
     let texture = checker();
-    assert_eq!(texture.sample_nearest_clamp([0.0, 0.0]).unwrap(), [255, 0, 0, 255]);
-    assert_eq!(texture.sample_nearest_clamp([1.0, 0.0]).unwrap(), [0, 255, 0, 255]);
-    assert_eq!(texture.sample_nearest_clamp([0.0, 1.0]).unwrap(), [0, 0, 255, 255]);
+    assert_eq!(
+        texture.sample_nearest_clamp([0.0, 0.0]).unwrap(),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        texture.sample_nearest_clamp([1.0, 0.0]).unwrap(),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        texture.sample_nearest_clamp([0.0, 1.0]).unwrap(),
+        [0, 0, 255, 255]
+    );
     assert_eq!(
         texture.sample_nearest_clamp([1.0, 1.0]).unwrap(),
         [255, 255, 255, 255]
@@ -64,7 +73,10 @@ fn nearest_clamp_sampling_has_explicit_top_left_uv_contract() {
         [0, 0, 255, 255]
     );
     for uv in [[f32::NAN, 0.0], [0.0, f32::INFINITY]] {
-        assert_eq!(texture.sample_nearest_clamp(uv), Err(TextureError::InvalidUv));
+        assert_eq!(
+            texture.sample_nearest_clamp(uv),
+            Err(TextureError::InvalidUv)
+        );
     }
 }
 
@@ -77,20 +89,24 @@ fn nearest_sampling_uses_normalized_texel_cell_boundaries() {
         TextureColorSpace::Linear,
     )
     .unwrap();
-    assert_eq!(texture.sample_nearest_clamp([0.30, 0.0]).unwrap(), [255, 0, 0, 255]);
-    assert_eq!(texture.sample_nearest_clamp([0.34, 0.0]).unwrap(), [0, 255, 0, 255]);
-    assert_eq!(texture.sample_nearest_clamp([1.0, 0.0]).unwrap(), [0, 0, 255, 255]);
+    assert_eq!(
+        texture.sample_nearest_clamp([0.30, 0.0]).unwrap(),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        texture.sample_nearest_clamp([0.34, 0.0]).unwrap(),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        texture.sample_nearest_clamp([1.0, 0.0]).unwrap(),
+        [0, 0, 255, 255]
+    );
 }
 
 #[test]
 fn srgb_decode_is_explicit_and_alpha_stays_linear() {
-    let texture = TextureData::new_rgba8(
-        1,
-        1,
-        vec![128, 255, 0, 128],
-        TextureColorSpace::Srgb,
-    )
-    .unwrap();
+    let texture =
+        TextureData::new_rgba8(1, 1, vec![128, 255, 0, 128], TextureColorSpace::Srgb).unwrap();
     let sample = texture.sample_linear_nearest_clamp([0.5, 0.5]).unwrap();
     approx(sample[0], 0.215_860_53);
     approx(sample[1], 1.0);
@@ -119,18 +135,16 @@ fn material_tint_is_linear_opaque_and_texture_optional() {
         [0.25, 0.5, 0.75, 1.0]
     );
 
-    let transparent_texel = TextureData::new_rgba8(
-        1,
-        1,
-        vec![128, 64, 255, 0],
-        TextureColorSpace::Linear,
-    )
-    .unwrap();
+    let transparent_texel =
+        TextureData::new_rgba8(1, 1, vec![128, 64, 255, 0], TextureColorSpace::Linear).unwrap();
     let opaque_material = MeshMaterial {
         base_color: [1.0; 4],
         albedo: Some(transparent_texel),
     };
-    assert_eq!(opaque_material.sample_base_color([0.0, 0.0]).unwrap()[3], 1.0);
+    assert_eq!(
+        opaque_material.sample_base_color([0.0, 0.0]).unwrap()[3],
+        1.0
+    );
 }
 
 #[test]
