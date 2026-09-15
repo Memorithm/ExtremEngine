@@ -149,15 +149,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             .chunks_exact(4)
             .filter(|pixel| pixel[..3] != [255; 3])
             .count();
-        assert!(changed > 1000, "the projected meshes must occupy visible pixels");
+        assert!(
+            changed > 1000,
+            "the projected meshes must occupy visible pixels"
+        );
         let mut ppm = b"P6\n640 480\n255\n".to_vec();
         for pixel in pixels.chunks_exact(4) {
             ppm.extend_from_slice(&pixel[..3]);
         }
         std::fs::write(path, ppm)?;
-        println!(
-            "mesh_scene_passed: 3 lit instances, 36 triangles, nonwhite_pixels={changed}"
-        );
+        println!("mesh_scene_passed: 3 lit instances, 36 triangles, nonwhite_pixels={changed}");
         return Ok(());
     }
     let mut engine: Option<MeshEngine> = None;
@@ -179,11 +180,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if size.width == 0 || size.height == 0 {
                         return Ok(());
                     }
-                    let gpu = MeshRenderer::for_surface(
-                        Arc::clone(window),
-                        size.width,
-                        size.height,
-                    )?;
+                    let gpu =
+                        MeshRenderer::for_surface(Arc::clone(window), size.width, size.height)?;
                     engine = Some(scene(gpu, size.width as f32 / size.height as f32)?);
                 }
                 let engine = engine.as_mut().ok_or("missing initialized engine")?;
