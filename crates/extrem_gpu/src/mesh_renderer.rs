@@ -1,0 +1,535 @@
+//! Native indexed mesh pipeline shared by offscreen and existing surface targets.
+use crate::mesh_data::{
+    MAX_FRAME_DRAWS, MAX_GEOMETRY_BYTES, MAX_RESIDENT_MESHES, MeshData, MeshDraw, MeshError,
+    validate_extent, validate_frame,
+};
+use crate::mesh_safety::GpuScopes;
+use crate::{GpuContext, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const INSTANCE_STRIDE: usize = 80;
+const IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
+/// Submission observations, not GPU elapsed time or completed-on-screen evidence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MeshFrameReport {
+    pub submitted: bool,
+    pub surface_status: Option<SurfaceFrameStatus>,
+    pub draw_calls: usize,
+    pub triangles: usize,
+    pub uploaded_meshes: usize,
+    pub resident_geometry_bytes: usize,
+}
+
+struct UploadedMesh {
+    source: Arc<MeshData>,
+    vertex: wgpu::Buffer,
+    index: wgpu::Buffer,
+}
+
+/// Opaque vertex-color renderer. Uses GpuContext/SurfaceTarget rather than a second
+/// device-selection/surface implementation. Native blocking initialization/readback;
+/// browser async initialization is not implemented by this type.
+pub struct MeshRenderer {
+    context: GpuContext,
+    surface: Option<SurfaceTarget>,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    color: Option<wgpu::Texture>,
+    depth: wgpu::Texture,
+    pipeline: wgpu::RenderPipeline,
+    camera: wgpu::Buffer,
+    camera_bind: wgpu::BindGroup,
+    instances: wgpu::Buffer,
+    instance_bytes: Vec<u8>,
+    cached: Vec<UploadedMesh>,
+    has_frame: bool,
+}
+
+impl MeshRenderer {
+    /// Creates a readable RGBA8 offscreen target. A missing adapter returns an error.
+    pub fn headless(width: u32, height: u32) -> Result<Self, MeshError> {
+        validate_extent(width, height, 4096)?;
+        let context = GpuContext::headless().map_err(|e| MeshError::Gpu(e.to_string()))?;
+        Self::new(context, None, width, height)
+    }
+
+    /// Uses the existing surface-compatible adapter selection.
+    pub fn for_surface(
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, MeshError> {
+        validate_extent(width, height, 4096)?;
+        let (context, surface) = GpuContext::for_surface(target, width, height)
+            .map_err(|e| MeshError::Gpu(e.to_string()))?;
+        Self::new(context, Some(surface), width, height)
+    }
+
+    fn new(
+        context: GpuContext,
+        surface: Option<SurfaceTarget>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, MeshError> {
+        let device = context.device();
+        validate_extent(width, height, device.limits().max_texture_dimension_2d)?;
+        let format = surface
+            .as_ref()
+            .map_or(wgpu::TextureFormat::Rgba8Unorm, SurfaceTarget::format);
+        let scope = GpuScopes::new(device);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ExtremEngine indexed mesh shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("mesh.wgsl"))),
+        });
+        let vertices = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let instances_layout = wgpu::vertex_attr_array![
+            2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
+            5 => Float32x4, 6 => Float32x4
+        ];
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 24,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &vertices,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: INSTANCE_STRIDE as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &instances_layout,
+            }),
+        ];
+        let targets = [Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ExtremEngine opaque indexed mesh pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        scope.check()?;
+        let scope = GpuScopes::new(device);
+        let camera = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ExtremEngine mesh camera"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ExtremEngine mesh camera binding"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera.as_entire_binding(),
+            }],
+        });
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ExtremEngine bounded mesh instances"),
+            size: (MAX_FRAME_DRAWS * INSTANCE_STRIDE) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let color = surface
+            .is_none()
+            .then(|| target(device, width, height, format, true));
+        let depth = target(device, width, height, DEPTH_FORMAT, false);
+        scope.check()?;
+        Ok(Self {
+            context,
+            surface,
+            format,
+            width,
+            height,
+            color,
+            depth,
+            pipeline,
+            camera,
+            camera_bind,
+            instances,
+            instance_bytes: Vec::new(),
+            cached: Vec::new(),
+            has_frame: false,
+        })
+    }
+
+    /// Describes the adapter actually selected, including backend and device type.
+    pub fn adapter_description(&self) -> String {
+        format!("{:?}", self.context.adapter().get_info())
+    }
+
+    /// Zero size suspends submission without configuring an invalid GPU surface.
+    /// Invalid nonzero dimensions leave the previous extent/resources unchanged.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<bool, MeshError> {
+        if self.width == width && self.height == height {
+            return Ok(false);
+        }
+        if width == 0 || height == 0 {
+            self.width = width;
+            self.height = height;
+            self.has_frame = false;
+            return Ok(true);
+        }
+        let device = self.context.device();
+        validate_extent(width, height, device.limits().max_texture_dimension_2d)?;
+        let scope = GpuScopes::new(device);
+        let color = self
+            .surface
+            .is_none()
+            .then(|| target(device, width, height, self.format, true));
+        let depth = target(device, width, height, DEPTH_FORMAT, false);
+        scope.check()?;
+        if let Some(surface) = &mut self.surface {
+            let scope = GpuScopes::new(device);
+            surface.resize(device, width, height);
+            if let Err(error) = scope.check() {
+                self.has_frame = false;
+                return Err(error);
+            }
+        }
+        self.color = color;
+        self.depth = depth;
+        self.width = width;
+        self.height = height;
+        self.has_frame = false;
+        Ok(true)
+    }
+
+    /// Validates a whole frame before upload/encoding. Reuses geometry by live Arc
+    /// identity; each draw has a distinct instance slot, so queue writes cannot make
+    /// every draw accidentally share the last transform/material.
+    pub fn render(
+        &mut self,
+        camera: Option<[f32; 16]>,
+        draws: &[MeshDraw],
+    ) -> Result<MeshFrameReport, MeshError> {
+        let camera = match camera {
+            Some(camera) => camera,
+            None if draws.is_empty() => IDENTITY,
+            None => return Err(MeshError::MissingCamera),
+        };
+        validate_frame(&camera, draws)?;
+        let mut seen = HashSet::new();
+        let mut bytes = 0usize;
+        for draw in draws {
+            if seen.insert(Arc::as_ptr(&draw.mesh)) {
+                bytes = bytes
+                    .checked_add(draw.mesh.payload_bytes())
+                    .ok_or(MeshError::Capacity)?;
+                if seen.len() > MAX_RESIDENT_MESHES || bytes > MAX_GEOMETRY_BYTES {
+                    return Err(MeshError::Capacity);
+                }
+            }
+        }
+        if self.width == 0 || self.height == 0 {
+            return Ok(MeshFrameReport {
+                surface_status: Some(SurfaceFrameStatus::Occluded),
+                ..MeshFrameReport::default()
+            });
+        }
+        let scope = GpuScopes::new(self.context.device());
+        let acquired = self.surface.as_ref().map(|surface| {
+            let mut frame = surface.acquire_frame();
+            if matches!(
+                frame,
+                SurfaceFrame::Unavailable(SurfaceFrameStatus::Lost | SurfaceFrameStatus::Outdated)
+            ) {
+                surface.reconfigure(self.context.device());
+                frame = surface.acquire_frame();
+            }
+            frame
+        });
+        let (surface_texture, status) = match acquired {
+            Some(SurfaceFrame::Renderable { texture, status }) => (Some(texture), Some(status)),
+            Some(SurfaceFrame::Unavailable(status)) => {
+                scope.check()?;
+                return Ok(MeshFrameReport {
+                    surface_status: Some(status),
+                    ..MeshFrameReport::default()
+                });
+            }
+            None => (None, None),
+        };
+        let texture = surface_texture
+            .as_ref()
+            .map(|frame| &frame.texture)
+            .or(self.color.as_ref())
+            .ok_or(MeshError::ReadbackUnavailable)?;
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = self
+            .depth
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.cached
+            .retain(|entry| seen.contains(&Arc::as_ptr(&entry.source)));
+        let mut uploaded = 0;
+        let mut slots = Vec::with_capacity(draws.len());
+        self.instance_bytes.clear();
+        for draw in draws {
+            let slot = match self
+                .cached
+                .iter()
+                .position(|entry| Arc::ptr_eq(&entry.source, &draw.mesh))
+            {
+                Some(slot) => slot,
+                None => {
+                    let entry = upload(
+                        self.context.device(),
+                        self.context.queue(),
+                        Arc::clone(&draw.mesh),
+                    );
+                    self.cached.push(entry);
+                    uploaded += 1;
+                    self.cached.len() - 1
+                }
+            };
+            slots.push(slot);
+            for value in draw.model.iter().chain(&draw.color) {
+                self.instance_bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut camera_bytes = [0_u8; 64];
+        for (chunk, value) in camera_bytes.chunks_exact_mut(4).zip(camera) {
+            chunk.copy_from_slice(&value.to_le_bytes());
+        }
+        self.context
+            .queue()
+            .write_buffer(&self.camera, 0, &camera_bytes);
+        if !draws.is_empty() {
+            self.context
+                .queue()
+                .write_buffer(&self.instances, 0, &self.instance_bytes);
+        }
+        let mut encoder =
+            self.context
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ExtremEngine mesh frame"),
+                });
+        {
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ExtremEngine opaque meshes"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.camera_bind, &[]);
+            pass.set_vertex_buffer(1, self.instances.slice(..));
+            for (instance, &slot) in slots.iter().enumerate() {
+                let mesh = &self.cached[slot];
+                pass.set_vertex_buffer(0, mesh.vertex.slice(..));
+                pass.set_index_buffer(mesh.index.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(
+                    0..mesh.source.indices().len() as u32,
+                    0,
+                    instance as u32..instance as u32 + 1,
+                );
+            }
+        }
+        self.context.queue().submit(Some(encoder.finish()));
+        if let Err(error) = scope.check() {
+            self.cached.clear();
+            self.has_frame = false;
+            return Err(error);
+        }
+        if let Some(texture) = surface_texture {
+            self.context.queue().present(texture);
+            if status == Some(SurfaceFrameStatus::Suboptimal) {
+                if let Some(surface) = &self.surface {
+                    let scope = GpuScopes::new(self.context.device());
+                    surface.reconfigure(self.context.device());
+                    if let Err(error) = scope.check() {
+                        self.has_frame = false;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        self.has_frame = true;
+        Ok(MeshFrameReport {
+            submitted: true,
+            surface_status: status,
+            draw_calls: draws.len(),
+            triangles: draws.iter().map(|draw| draw.mesh.indices().len() / 3).sum(),
+            uploaded_meshes: uploaded,
+            resident_geometry_bytes: bytes,
+        })
+    }
+
+    /// Reads the last submitted offscreen RGBA8 image with padded GPU rows removed.
+    /// Native blocking only, with bounded GPU/callback waits. Window targets reject it.
+    pub fn read_rgba(&self) -> Result<Vec<u8>, MeshError> {
+        if !self.has_frame || self.width == 0 || self.height == 0 {
+            return Err(MeshError::ReadbackUnavailable);
+        }
+        let texture = self.color.as_ref().ok_or(MeshError::ReadbackUnavailable)?;
+        let row = self.width.checked_mul(4).ok_or(MeshError::Capacity)?;
+        let padded = row.div_ceil(256) * 256;
+        let device = self.context.device();
+        let scope = GpuScopes::new(device);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ExtremEngine mesh readback"),
+            size: u64::from(padded) * u64::from(self.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ExtremEngine mesh readback copy"),
+        });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = self.context.queue().submit(Some(encoder.finish()));
+        scope.check()?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _delivery = sender.send(result);
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .map_err(|error| MeshError::Gpu(error.to_string()))?;
+        receiver
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| MeshError::Gpu(error.to_string()))?
+            .map_err(|error| MeshError::Gpu(error.to_string()))?;
+        let mapped = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|error| MeshError::Gpu(error.to_string()))?;
+        let mut output = Vec::with_capacity(row as usize * self.height as usize);
+        for bytes in mapped.chunks_exact(padded as usize) {
+            output.extend_from_slice(&bytes[..row as usize]);
+        }
+        drop(mapped);
+        buffer.unmap();
+        Ok(output)
+    }
+}
+
+fn target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    readable: bool,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ExtremEngine bounded mesh target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if readable {
+                wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::empty()
+            },
+        view_formats: &[],
+    })
+}
+
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> UploadedMesh {
+    let mut vertices = Vec::with_capacity(source.vertices().len() * 24);
+    for vertex in source.vertices() {
+        for value in vertex.position.iter().chain(&vertex.color) {
+            vertices.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let mut indices = Vec::with_capacity(source.indices().len() * 4);
+    for index in source.indices() {
+        indices.extend_from_slice(&index.to_le_bytes());
+    }
+    // Avoid mapped-at-creation helper access to an invalid buffer after OOM.
+    // Allocation and queue-write failures are captured by the caller's scopes.
+    let vertex = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ExtremEngine mesh vertices"),
+        size: vertices.len() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let index = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ExtremEngine mesh indices"),
+        size: indices.len() as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&vertex, 0, &vertices);
+    queue.write_buffer(&index, 0, &indices);
+    UploadedMesh {
+        source,
+        vertex,
+        index,
+    }
+}
