@@ -37,7 +37,10 @@ fn invalid_engine() -> Engine<Probe> {
 fn cyclic_tick_does_not_unwind() {
     let mut engine = invalid_engine();
     let outcome = catch_unwind(AssertUnwindSafe(|| engine.tick(0.25)));
-    assert!(outcome.is_ok(), "a graph error must be returned, not panicked");
+    assert!(
+        outcome.is_ok(),
+        "a graph error must be returned, not panicked"
+    );
 }
 
 #[test]
@@ -48,13 +51,19 @@ fn failed_compile_does_not_advance_time_or_open_backend() {
     let _outcome = catch_unwind(AssertUnwindSafe(|| engine.tick(0.25)));
     assert_eq!(engine.app().time(), time);
     let renderer = engine.renderer();
-    assert_eq!((renderer.begins, renderer.submits, renderer.ends), (0, 0, 0));
+    assert_eq!(
+        (renderer.begins, renderer.submits, renderer.ends),
+        (0, 0, 0)
+    );
 }
 
 #[test]
 fn run_for_rejects_a_cyclic_graph_without_unwinding() {
     let mut engine = invalid_engine();
     let outcome = catch_unwind(AssertUnwindSafe(|| engine.run_for(3)));
-    assert!(outcome.is_ok(), "batch execution must propagate the graph error");
+    assert!(
+        outcome.is_ok(),
+        "batch execution must propagate the graph error"
+    );
     assert_eq!(engine.app().time().frame, 0);
 }
