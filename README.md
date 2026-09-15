@@ -19,11 +19,13 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 - `extrem_physics` : **solveur de référence minimal** (gravité + sol + box), avec validation des données. Ce n'est pas encore un solveur rigid-body général.
 - `extrem_science` : Euler/RK4 avec validation numérique et workspace RK4 réutilisable.
 - `extrem_audio` : contrat de commandes/backend audio et backend nul; sortie audio de production encore à implémenter.
-- `extrem_engine` : façade haut niveau, propagation réutilisable intégrée à PostUpdate avec statistiques, extraction déterminisée, render graph persistant et adaptateur `WgpuRenderer` vers le presenter GPU de validation.
+- `extrem_engine` : façade haut niveau, propagation réutilisable intégrée à PostUpdate, extraction triée avec buffer compact réutilisable et calcul de la seule caméra sélectionnée, statistiques, render graph persistant et adaptateur `WgpuRenderer` vers le presenter GPU de validation.
 
 ## Programme de performance
 
-`EE-PERF-01` porte sur le validateur hiérarchique. `EE-PERF-02` porte sur la propagation des transformations : suppression des copies des listes d'enfants, réemploi des buffers dans le moteur et comparaison bit à bit avec l'ancienne implémentation. Les deux séries conservent leur oracle historique et leur microbenchmark CPU avant/après sur plusieurs tailles et formes de scènes. Le workflow `Scene Performance` conserve les échantillons bruts, le SHA réellement exécuté et l'environnement dans ses artefacts. La méthode et les prochaines tranches sont décrites dans `docs/PERFORMANCE.md`.
+`EE-PERF-01` porte sur le validateur hiérarchique. `EE-PERF-02` porte sur la propagation des transformations : suppression des copies des listes d'enfants et réemploi des buffers dans le moteur. `EE-PERF-03` porte sur l'extraction de rendu : suppression de l'ensemble temporaire d'entités, buffer compact réutilisable, tri en place et sélection de caméra avant calcul de matrice. Les trois séries conservent leur oracle historique et leur microbenchmark CPU avant/après avec contrôle des sorties.
+
+Les workflows `Scene Performance` et `Render Extraction Performance` conservent les échantillons bruts, le SHA réellement exécuté et l'environnement dans leurs artefacts. `docs/PERFORMANCE.md` décrit les tranches EE-PERF-01/02 et leurs premiers checkpoints ; `docs/RENDER_EXTRACTION.md` décrit EE-PERF-03 et les prochaines tranches actualisées. La libération explicite du buffer d'extraction est disponible via `Engine::release_render_scratch()`.
 
 Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions éventuelles et leurs limites doivent être évalués à partir des sorties effectivement produites.
 
@@ -33,6 +35,7 @@ Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --all-targets --locked
+cargo test -p extrem_engine --doc --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
@@ -45,4 +48,5 @@ La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, W
 - `docs/ANIMATION.md`
 - `docs/EDITOR.md`
 - `docs/PERFORMANCE.md`
+- `docs/RENDER_EXTRACTION.md`
 - `docs/SECURITY.md`
