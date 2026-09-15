@@ -4,13 +4,19 @@ use extrem_render::RenderGraph;
 #[test]
 fn stable_ticks_and_noop_access_reuse_pass_names() {
     let mut engine = Engine::new();
-    assert_eq!(engine.last_plan_preparation_stats(), RenderPlanPreparationStats::default());
+    assert_eq!(
+        engine.last_plan_preparation_stats(),
+        RenderPlanPreparationStats::default()
+    );
     engine.tick(0.0).unwrap();
-    assert_eq!(engine.last_plan_preparation_stats(), RenderPlanPreparationStats {
-        passes: 3,
-        refreshed_names: true,
-        copied_name_bytes: 11,
-    });
+    assert_eq!(
+        engine.last_plan_preparation_stats(),
+        RenderPlanPreparationStats {
+            passes: 3,
+            refreshed_names: true,
+            copied_name_bytes: 11,
+        }
+    );
     let names_ptr = engine.last_render_passes().as_ptr();
     let string_ptr = engine.last_render_passes()[0].as_ptr();
     for _ in 0..16 {
@@ -58,7 +64,10 @@ fn rejected_tick_preserves_preparation_diagnostics_and_repairs_once() {
         assert_eq!(engine.last_render_passes(), ["clear", "main", "ui"]);
         assert_eq!(engine.app().time(), time);
     }
-    engine.render_graph_mut().remove_dependency(bad, bad).unwrap();
+    engine
+        .render_graph_mut()
+        .remove_dependency(bad, bad)
+        .unwrap();
     engine.tick(0.1).unwrap();
     assert!(engine.last_plan_preparation_stats().refreshed_names);
     assert_eq!(engine.last_render_passes(), ["clear", "main", "ui", "bad"]);

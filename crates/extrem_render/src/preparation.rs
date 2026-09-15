@@ -49,7 +49,10 @@ impl RenderPlanPreparation {
         graph: &mut RenderGraph,
     ) -> Result<RenderPlanPreparationStats, RenderGraphError> {
         let compiled = graph.compile_shared()?;
-        let refreshed_names = self.plan.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &compiled));
+        let refreshed_names = self
+            .plan
+            .as_ref()
+            .is_none_or(|old| !Arc::ptr_eq(old, &compiled));
         let mut stats = RenderPlanPreparationStats {
             passes: compiled.execution_order.len(),
             refreshed_names,

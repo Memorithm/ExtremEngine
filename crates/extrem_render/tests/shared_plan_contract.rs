@@ -32,8 +32,14 @@ fn noop_and_rejected_edits_keep_the_same_plan() {
     other.add_pass("x");
     other.add_pass("y");
     let outside = other.add_pass("z");
-    assert_eq!(graph.add_dependency(a, outside), Err(RenderGraphError::MissingPass(outside)));
-    assert_eq!(graph.remove_dependency(a, outside), Err(RenderGraphError::MissingPass(outside)));
+    assert_eq!(
+        graph.add_dependency(a, outside),
+        Err(RenderGraphError::MissingPass(outside))
+    );
+    assert_eq!(
+        graph.remove_dependency(a, outside),
+        Err(RenderGraphError::MissingPass(outside))
+    );
     assert!(Arc::ptr_eq(&first, &graph.compile_shared().unwrap()));
 }
 
@@ -93,7 +99,10 @@ fn preparation_preserves_names_on_failure_then_recovers() {
     let pointer = prepared.pass_names()[0].as_ptr();
     graph.add_dependency(a, a).unwrap();
     for _ in 0..3 {
-        assert_eq!(prepared.prepare(&mut graph), Err(RenderGraphError::Cycle(a)));
+        assert_eq!(
+            prepared.prepare(&mut graph),
+            Err(RenderGraphError::Cycle(a))
+        );
         assert_eq!(prepared.pass_names(), ["é"]);
         assert_eq!(prepared.pass_names()[0].as_ptr(), pointer);
     }
