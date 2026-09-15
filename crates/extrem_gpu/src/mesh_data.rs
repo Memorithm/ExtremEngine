@@ -80,7 +80,7 @@ impl MeshData {
         if vertices.len() > MAX_MESH_VERTICES || indices.len() > MAX_MESH_INDICES {
             return Err(MeshError::Capacity);
         }
-        if indices.len() % 3 != 0 {
+        if !indices.len().is_multiple_of(3) {
             return Err(MeshError::InvalidIndexCount);
         }
         if vertices.iter().any(|v| {
