@@ -133,8 +133,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()?;
     assert!(first.submitted);
     assert_eq!(
-        (first.draw_calls, first.triangles, first.uploaded_meshes),
-        (2, 4, 1)
+        (
+            first.draw_calls,
+            first.encoded_draw_calls,
+            first.triangles,
+            first.uploaded_meshes,
+        ),
+        (2, 1, 4, 1)
     );
     let extraction = engine.renderer().last_mesh_extraction();
     assert_eq!(extraction.eligible_lights, 1);
@@ -254,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(&Err(MeshError::MissingExtraction))
     );
     println!(
-        "PASS: generated normals, CPU/GPU Lambert parity, normal rotation, indexed geometry, shared upload, depth order, camera, visibility, padded readback, suspend/resume, rejection"
+        "PASS: generated normals, CPU/GPU Lambert parity, consecutive instancing, normal rotation, indexed geometry, shared upload, depth order, camera, visibility, padded readback, suspend/resume, rejection"
     );
     Ok(())
 }
