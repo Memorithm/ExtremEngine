@@ -11,3 +11,8 @@ pub use mesh_data::{
 mod mesh_renderer;
 pub use mesh_renderer::{MeshFrameReport, MeshRenderer};
 mod mesh_safety;
+mod texture;
+pub use texture::{
+    MAX_TEXTURE_BYTES, MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS, MeshMaterial, TextureColorSpace,
+    TextureData, TextureError,
+};
