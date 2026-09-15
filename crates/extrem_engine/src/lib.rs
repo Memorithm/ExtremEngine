@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+mod extraction;
+pub use extraction::{RenderExtractionStats, RenderExtractor};
 
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
-use extrem_math::Transform;
 use extrem_render::{
     FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
 };
@@ -106,6 +106,8 @@ pub struct Engine<R: RenderBackend = NullRenderer> {
     render_graph: RenderGraph,
     last_frame_stats: FrameStats,
     last_render_passes: Vec<String>,
+    extractor: RenderExtractor,
+    last_extraction_stats: RenderExtractionStats,
 }
 
 impl Engine<NullRenderer> {
@@ -162,6 +164,8 @@ impl<R: RenderBackend> Engine<R> {
             render_graph: default_render_graph(),
             last_frame_stats: FrameStats::default(),
             last_render_passes: Vec::new(),
+            extractor: RenderExtractor::default(),
+            last_extraction_stats: RenderExtractionStats::default(),
         }
     }
 
@@ -223,68 +227,11 @@ impl<R: RenderBackend> Engine<R> {
             .filter_map(|pass| self.render_graph.pass_name(*pass).map(str::to_owned))
             .collect();
 
-        // ECS storage iteration is deliberately unspecified. Lowest entity ID is the explicit,
-        // deterministic tie-break until a dedicated camera priority component is introduced.
-        let active_camera = self
-            .world()
-            .iter::<Camera>()
-            .filter(|(_, camera)| camera.active)
-            .filter_map(|(entity, camera)| {
-                let transform = self
-                    .world()
-                    .get::<GlobalTransform>(entity)
-                    .map(|global| global.0)
-                    .or_else(|| self.world().get::<Transform>(entity).copied())?;
-                Some((
-                    entity,
-                    camera.view_projection(transform, self.config.viewport_aspect),
-                ))
-            })
-            .min_by_key(|(entity, _)| *entity);
-
-        if let Some((entity, view_projection)) = active_camera {
-            self.renderer.submit(RenderCommand::SetCamera {
-                entity,
-                view_projection,
-            });
-        }
-
-        let global_entities: HashSet<_> = self
-            .world()
-            .iter::<GlobalTransform>()
-            .map(|(entity, _)| entity)
-            .collect();
-        let mut commands: Vec<_> = self
-            .world()
-            .iter::<GlobalTransform>()
-            .map(|(entity, transform)| {
-                (
-                    entity,
-                    RenderCommand::Transform {
-                        entity,
-                        translation: transform.0.translation,
-                    },
-                )
-            })
-            .collect();
-        commands.extend(
-            self.world()
-                .iter::<Transform>()
-                .filter(|(entity, _)| !global_entities.contains(entity))
-                .map(|(entity, transform)| {
-                    (
-                        entity,
-                        RenderCommand::Transform {
-                            entity,
-                            translation: transform.translation,
-                        },
-                    )
-                }),
+        self.last_extraction_stats = self.extractor.submit(
+            self.app.world(),
+            self.config.viewport_aspect,
+            &mut self.renderer,
         );
-        commands.sort_by_key(|(entity, _)| *entity);
-        for (_, command) in commands {
-            self.renderer.submit(command);
-        }
 
         self.last_frame_stats = self.renderer.end_frame();
         if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
@@ -305,6 +252,18 @@ impl<R: RenderBackend> Engine<R> {
 
     pub fn last_render_passes(&self) -> &[String] {
         &self.last_render_passes
+    }
+
+    /// Observations from the last completed extraction, initially empty.
+    pub fn last_extraction_stats(&self) -> RenderExtractionStats {
+        self.last_extraction_stats
+    }
+
+    /// Releases extraction scratch; previous-frame diagnostics remain unchanged.
+    ///
+    /// Does not release propagation scratch, render-graph cache or backend buffers.
+    pub fn release_render_scratch(&mut self) {
+        self.extractor.release_memory();
     }
 }
 
