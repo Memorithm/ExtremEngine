@@ -32,13 +32,13 @@ jobs:
           set -euo pipefail
           mkdir -p dev-snapshot
           git rev-parse HEAD > dev-snapshot/revision.txt
-          git archive HEAD | gzip > dev-snapshot/source.tar.gz
-          cp "$(rustup which rustfmt)" dev-snapshot/rustfmt
-          sha256sum dev-snapshot/rustfmt dev-snapshot/source.tar.gz > dev-snapshot/SHA256SUMS
-          ldd dev-snapshot/rustfmt > dev-snapshot/formatter-libraries.txt
+          cargo fmt --all
+          git diff --binary > dev-snapshot/source-format.patch
+          git diff --name-only > dev-snapshot/formatted-paths.txt
+          git restore --worktree .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: mesh-dev-snapshot-${{ github.run_id }}
+          name: mesh-format-diagnostics-${{ github.run_id }}
           path: dev-snapshot/
           retention-days: 1
       - name: CPU contracts and documentation
