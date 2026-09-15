@@ -168,17 +168,23 @@ fn lambert_reference_has_front_back_and_colored_light_contracts() {
 
 #[test]
 fn invalid_lights_are_rejected_before_gpu_submission() {
-    let mut light = MeshLight::default();
-    light.direction_to_light = [0.0; 3];
+    let light = MeshLight {
+        direction_to_light: [0.0; 3],
+        ..MeshLight::default()
+    };
     assert_eq!(
         validate_lit_frame(&identity(), light, &[draw()]),
         Err(MeshError::InvalidLight)
     );
-    let mut light = MeshLight::default();
-    light.intensity = 17.0;
+    let light = MeshLight {
+        intensity: 17.0,
+        ..MeshLight::default()
+    };
     assert_eq!(light.validate(), Err(MeshError::InvalidLight));
-    light = MeshLight::default();
-    light.ambient = f32::NAN;
+    let light = MeshLight {
+        ambient: f32::NAN,
+        ..MeshLight::default()
+    };
     assert_eq!(light.validate(), Err(MeshError::InvalidLight));
 }
 
