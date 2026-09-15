@@ -6,6 +6,7 @@ use extrem_ecs::World;
 use extrem_render::{
     FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
 };
+pub use extrem_render::RenderGraphError;
 
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
@@ -210,17 +211,36 @@ impl<R: RenderBackend> Engine<R> {
         self.world_mut().insert_resource(input.clone());
     }
 
-    pub fn tick(&mut self, delta_seconds: f32) -> UpdateReport {
+    /// Validates the graph, then advances simulation and renders one frame.
+    ///
+    /// # Errors
+    /// Returns a graph compilation error before running any application system or
+    /// backend callback. On this error, time, world, input transitions, extraction
+    /// scratch and all last-successful-frame diagnostics are unchanged. Fix the
+    /// graph and retry; the rejected delta was not added to simulation time.
+    /// System/backend panics and allocation failure are not intercepted or rolled back.
+    ///
+    /// # Examples
+    /// ```
+    /// use extrem_engine::{Engine, RenderGraphError};
+    /// let mut engine = Engine::new();
+    /// let bad = engine.render_graph_mut().add_pass("bad");
+    /// engine.render_graph_mut().add_dependency(bad, bad)?;
+    /// assert_eq!(engine.tick(0.1), Err(RenderGraphError::Cycle(bad)));
+    /// assert_eq!(engine.app().time().frame, 0);
+    /// engine.render_graph_mut().remove_dependency(bad, bad)?;
+    /// assert_eq!(engine.tick(0.1)?.frame, 1);
+    /// # Ok::<(), RenderGraphError>(())
+    /// ```
+    pub fn tick(&mut self, delta_seconds: f32) -> Result<UpdateReport, RenderGraphError> {
+        // Reject before simulation, input consumption, diagnostics or backend frame opening.
+        let compiled = self.render_graph.compile()?;
         let report = self.app.update(delta_seconds);
         self.renderer.begin_frame(FrameInfo {
             index: report.frame,
             delta_seconds: report.delta_seconds,
         });
 
-        let compiled = self
-            .render_graph
-            .compile()
-            .expect("the built-in render graph must remain acyclic");
         self.last_render_passes = compiled
             .execution_order
             .iter()
@@ -237,10 +257,26 @@ impl<R: RenderBackend> Engine<R> {
         if let Some(input) = self.world_mut().get_resource_mut::<Input>() {
             input.end_frame();
         }
-        report
+        Ok(report)
     }
 
-    pub fn run_for(&mut self, frames: usize) -> Vec<UpdateReport> {
+    /// Runs the requested number of frames, stopping at the first rejected frame.
+    ///
+    /// # Errors
+    /// Propagates the first `tick` error. This is not a transaction over earlier
+    /// successful frames. Zero frames is a no-op returning an empty successful list,
+    /// even when the graph is invalid; use `RenderGraph::compile` for explicit validation.
+    ///
+    /// # Examples
+    /// ```
+    /// use extrem_engine::{Engine, RenderGraphError};
+    /// let mut engine = Engine::new();
+    /// let reports = engine.run_for(3)?;
+    /// assert_eq!(reports.len(), 3);
+    /// assert_eq!(reports[2].frame, 3);
+    /// # Ok::<(), RenderGraphError>(())
+    /// ```
+    pub fn run_for(&mut self, frames: usize) -> Result<Vec<UpdateReport>, RenderGraphError> {
         (0..frames)
             .map(|_| self.tick(self.config.target_delta_seconds))
             .collect()
@@ -295,7 +331,7 @@ mod tests {
             }
         });
 
-        engine.run_for(2);
+        engine.run_for(2).expect("valid graph");
         let position = engine
             .world()
             .get::<Transform>(entity)
@@ -330,7 +366,7 @@ mod tests {
             );
         });
 
-        engine.tick(1.0 / 60.0);
+        engine.tick(1.0 / 60.0).expect("valid graph");
         assert_eq!(engine.last_frame_stats().submitted_commands, 2);
         assert_eq!(engine.last_render_passes(), ["clear", "main", "ui"]);
         assert!(
@@ -348,9 +384,9 @@ mod tests {
         let mut engine = Engine::new();
         let version = engine.render_graph().version();
         assert!(engine.render_graph().cached_plan().is_none());
-        engine.tick(1.0 / 60.0);
+        engine.tick(1.0 / 60.0).expect("valid graph");
         assert!(engine.render_graph().cached_plan().is_some());
-        engine.tick(1.0 / 60.0);
+        engine.tick(1.0 / 60.0).expect("valid graph");
         assert_eq!(engine.render_graph().version(), version);
     }
 
@@ -367,7 +403,7 @@ mod tests {
             .world_mut()
             .insert(first, Camera::default())
             .expect("camera");
-        engine.tick(1.0 / 60.0);
+        engine.tick(1.0 / 60.0).expect("valid graph");
         assert!(first < second);
         assert_eq!(engine.last_frame_stats().submitted_commands, 3);
     }
