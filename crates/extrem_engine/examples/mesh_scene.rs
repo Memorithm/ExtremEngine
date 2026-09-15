@@ -110,7 +110,7 @@ fn scene(gpu: MeshRenderer, aspect: f32) -> Result<MeshEngine, Box<dyn Error>> {
             if let Some(transform) = world.get_mut::<Transform>(entity) {
                 transform.rotation = Quat::from_euler(
                     0.2,
-                    time.elapsed_seconds as f32 * 0.4 + transform.translation.x * 0.2,
+                    time.elapsed_seconds * 0.4 + transform.translation.x * 0.2,
                     0.0,
                 );
             }
