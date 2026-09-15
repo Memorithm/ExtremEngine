@@ -30,7 +30,10 @@ fn unorm8(rgb: [f32; 3]) -> [u8; 4] {
 
 fn assert_pixel_near(actual: &[u8], expected: [u8; 4]) {
     for (actual, expected) in actual.iter().zip(expected) {
-        assert!(actual.abs_diff(expected) <= 1, "pixel channel {actual} != {expected}");
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "pixel channel {actual} != {expected}"
+        );
     }
 }
 
@@ -136,16 +139,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let extraction = engine.renderer().last_mesh_extraction();
     assert_eq!(extraction.eligible_lights, 1);
     assert_eq!(extraction.selected_light, Some(light_entity));
-    let front_red = unorm8(shade_lambert(
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-        light_gpu,
-    )?);
-    let front_blue = unorm8(shade_lambert(
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        light_gpu,
-    )?);
+    let front_red = unorm8(shade_lambert([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], light_gpu)?);
+    let front_blue = unorm8(shade_lambert([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], light_gpu)?);
     let image = engine.renderer().gpu().read_rgba()?;
     assert_eq!(image.len(), 65 * 49 * 4);
     assert_pixel_near(pixel(&image, 65, 32, 24), front_red);
@@ -160,11 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("near transform")?
         .rotation = Quat::from_axis_angle(Vec3::Y, std::f32::consts::PI);
     engine.tick(0.0)?;
-    let back_red = unorm8(shade_lambert(
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
-        light_gpu,
-    )?);
+    let back_red = unorm8(shade_lambert([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], light_gpu)?);
     assert_pixel_near(
         pixel(&engine.renderer().gpu().read_rgba()?, 65, 32, 24),
         back_red,
