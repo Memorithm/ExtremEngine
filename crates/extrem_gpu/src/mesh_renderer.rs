@@ -363,7 +363,7 @@ impl MeshRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("ExtremEngine lit mesh frame"),
                 });
-        let mut encoded_draw_calls = 0usize;
+        let encoded_draw_calls;
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view,
