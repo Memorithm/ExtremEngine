@@ -1,5 +1,10 @@
 mod extraction;
 pub use extraction::{RenderExtractionStats, RenderExtractor};
+mod mesh;
+pub use mesh::{
+    MeshData, MeshError, MeshExtractionStats, MeshExtractor, MeshFrameReport,
+    MeshInstance, MeshVertex, WgpuMeshRenderer,
+};
 
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
@@ -26,8 +31,8 @@ pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
 /// Adapter from the low-level WGPU presenter to ExtremEngine's backend contract.
 ///
-/// The current GPU path intentionally draws a built-in validation triangle. World mesh/material
-/// rendering is not claimed by this type yet; submitted world commands are counted for diagnostics.
+/// This legacy path draws a built-in validation triangle. Use WgpuMeshRenderer and
+/// Engine::with_mesh_renderer for actual world geometry.
 pub struct WgpuRenderer {
     presenter: WgpuPresenter,
     submitted_commands: usize,
@@ -111,6 +116,7 @@ pub struct Engine<R: RenderBackend = NullRenderer> {
     last_plan_preparation_stats: RenderPlanPreparationStats,
     extractor: RenderExtractor,
     last_extraction_stats: RenderExtractionStats,
+    backend_extractor: Option<fn(&World, &mut R)>,
 }
 
 impl Engine<NullRenderer> {
@@ -170,6 +176,7 @@ impl<R: RenderBackend> Engine<R> {
             last_plan_preparation_stats: RenderPlanPreparationStats::default(),
             extractor: RenderExtractor::default(),
             last_extraction_stats: RenderExtractionStats::default(),
+            backend_extractor: None,
         }
     }
 
@@ -199,6 +206,23 @@ impl<R: RenderBackend> Engine<R> {
 
     pub fn config(&self) -> EngineConfig {
         self.config
+    }
+
+    /// Updates camera aspect only for finite positive values, preserving it on error.
+    pub fn set_viewport_aspect(&mut self, aspect: f32) -> bool {
+        if !aspect.is_finite() || aspect <= 0.0 {
+            return false;
+        }
+        self.config.viewport_aspect = aspect;
+        true
+    }
+
+    /// Installs a read-only world extraction hook, called after begin_frame and App
+    /// stages, before camera/translation submission. Replaces any previous hook.
+    /// The hook is never invoked on a rejected render graph. It must expose its own
+    /// backend failures; user hook panics are not intercepted by Engine.
+    pub fn set_backend_extractor(&mut self, extract: fn(&World, &mut R)) {
+        self.backend_extractor = Some(extract);
     }
 
     pub fn render_graph(&self) -> &RenderGraph {
@@ -243,7 +267,9 @@ impl<R: RenderBackend> Engine<R> {
             index: report.frame,
             delta_seconds: report.delta_seconds,
         });
-
+        if let Some(extract) = self.backend_extractor {
+            extract(self.app.world(), &mut self.renderer);
+        }
         self.last_extraction_stats = self.extractor.submit(
             self.app.world(),
             self.config.viewport_aspect,

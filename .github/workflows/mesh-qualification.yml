@@ -1,0 +1,56 @@
+name: Mesh Qualification
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mesh-qualification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pixels:
+    name: Indexed world mesh pixel qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: CPU contracts and documentation
+        run: |
+          cargo test -p extrem_gpu -p extrem_engine --all-targets --locked
+          cargo test -p extrem_gpu -p extrem_engine --doc --locked
+      - name: Provide a software Vulkan implementation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+      - name: Execute required pixel checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence "$RUNNER_TEMP/mesh-xdg"
+          chmod 700 "$RUNNER_TEMP/mesh-xdg"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/mesh-xdg"
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            uname -a
+            dpkg-query -W mesa-vulkan-drivers
+          } > evidence/environment.txt
+          cargo run -p extrem_engine --example mesh_qualification --locked -- evidence/mesh-depth.ppm | tee evidence/pixel-checks.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mesh-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90
