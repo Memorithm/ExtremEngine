@@ -1,21 +1,56 @@
 //! Opt-in world-mesh backend using the existing GPU context and surface authority.
 use crate::{Engine, EngineConfig};
 use extrem_ecs::{Entity, World};
-use extrem_gpu::{MAX_FRAME_DRAWS, MeshDraw, MeshRenderer};
-use extrem_math::Transform;
+use extrem_gpu::{MAX_FRAME_DRAWS, MeshDraw, MeshLight, MeshRenderer};
+use extrem_math::{Transform, Vec3};
 use extrem_render::{FrameInfo, FrameStats, RenderBackend, RenderCommand};
 use extrem_scene::{GlobalTransform, Visibility};
 use std::sync::Arc;
 
 pub use extrem_gpu::{MeshData, MeshError, MeshFrameReport, MeshVertex};
 
-/// ECS component for an opaque, unlit, vertex-colored mesh instance.
-/// Geometry is immutable and can be shared. The current local/global Transform is
-/// read after App stages on every frame; Visibility(false) hides this instance.
+/// ECS component for an opaque vertex-colored mesh instance.
 #[derive(Clone, Debug)]
 pub struct MeshInstance {
     pub geometry: Arc<MeshData>,
     pub color: [f32; 4],
+}
+
+/// One world-space directional light. The lowest active Entity ID wins deterministically.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DirectionalLight {
+    pub active: bool,
+    pub direction_to_light: Vec3,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub ambient: f32,
+}
+
+impl Default for DirectionalLight {
+    fn default() -> Self {
+        Self {
+            active: true,
+            direction_to_light: Vec3::new(0.4, 0.8, 0.5),
+            color: [1.0; 3],
+            intensity: 0.85,
+            ambient: 0.15,
+        }
+    }
+}
+
+impl DirectionalLight {
+    fn gpu(self) -> MeshLight {
+        MeshLight {
+            direction_to_light: [
+                self.direction_to_light.x,
+                self.direction_to_light.y,
+                self.direction_to_light.z,
+            ],
+            color: self.color,
+            intensity: self.intensity,
+            ambient: self.ambient,
+        }
+    }
 }
 
 /// CPU extraction observations, independent from actual GPU submission success.
@@ -24,9 +59,11 @@ pub struct MeshExtractionStats {
     pub visible: usize,
     pub hidden: usize,
     pub missing_transform: usize,
+    pub eligible_lights: usize,
+    pub selected_light: Option<Entity>,
 }
 
-/// Bounded reusable mesh extraction. No GPU or window is needed to test this path.
+/// Bounded reusable mesh extraction. No GPU or window is needed to test mesh collection.
 #[derive(Debug, Default)]
 pub struct MeshExtractor {
     items: Vec<(Entity, MeshDraw)>,
@@ -35,7 +72,6 @@ pub struct MeshExtractor {
 
 impl MeshExtractor {
     /// Reads all MeshInstance entities, validates transforms/materials and sorts IDs.
-    /// On error the submitted draw slice is empty, never a partial visible scene.
     pub fn extract(&mut self, world: &World) -> Result<MeshExtractionStats, MeshError> {
         self.items.clear();
         self.draws.clear();
@@ -85,15 +121,19 @@ impl MeshExtractor {
     pub fn draws(&self) -> &[MeshDraw] {
         &self.draws
     }
+
+    fn clear_draws(&mut self) {
+        self.items.clear();
+        self.draws.clear();
+    }
 }
 
-/// Real opaque indexed rendering. The legacy WgpuRenderer remains a validation
-/// triangle presenter; this backend deliberately does not draw a fallback triangle.
-/// Use Engine::with_mesh_renderer so mesh extraction is attached to the frame loop.
+/// Real opaque indexed rendering with one selected directional light.
 pub struct WgpuMeshRenderer {
     gpu: MeshRenderer,
     extractor: MeshExtractor,
     camera: Option<[f32; 16]>,
+    light: MeshLight,
     extraction_error: Option<MeshError>,
     last_extraction: MeshExtractionStats,
     last_result: Option<Result<MeshFrameReport, MeshError>>,
@@ -106,6 +146,7 @@ impl WgpuMeshRenderer {
             gpu,
             extractor: MeshExtractor::default(),
             camera: None,
+            light: MeshLight::default(),
             extraction_error: None,
             last_extraction: MeshExtractionStats::default(),
             last_result: None,
@@ -121,8 +162,6 @@ impl WgpuMeshRenderer {
         &mut self.gpu
     }
 
-    /// GPU failures/surface-unavailability are separate from tick's RenderGraphError.
-    /// A successful tick alone does not prove that a GPU frame was submitted.
     pub fn last_mesh_result(&self) -> Option<&Result<MeshFrameReport, MeshError>> {
         self.last_result.as_ref()
     }
@@ -132,19 +171,47 @@ impl WgpuMeshRenderer {
     }
 
     fn extract(world: &World, renderer: &mut Self) {
-        match renderer.extractor.extract(world) {
-            Ok(stats) => {
-                renderer.last_extraction = stats;
-                renderer.extraction_error = None;
+        let mut stats = match renderer.extractor.extract(world) {
+            Ok(stats) => stats,
+            Err(error) => {
+                renderer.extraction_error = Some(error);
+                return;
             }
-            Err(error) => renderer.extraction_error = Some(error),
+        };
+        renderer.light = MeshLight::default();
+        let mut selected: Option<(Entity, DirectionalLight)> = None;
+        for (entity, light) in world.iter::<DirectionalLight>() {
+            if !light.active {
+                continue;
+            }
+            stats.eligible_lights += 1;
+            if selected
+                .as_ref()
+                .is_none_or(|(selected_entity, _)| entity < *selected_entity)
+            {
+                selected = Some((entity, *light));
+            }
         }
+        if let Some((entity, light)) = selected {
+            let light = light.gpu();
+            if let Err(error) = light.validate() {
+                renderer.extractor.clear_draws();
+                renderer.last_extraction = stats;
+                renderer.extraction_error = Some(error);
+                return;
+            }
+            renderer.light = light;
+            stats.selected_light = Some(entity);
+        }
+        renderer.last_extraction = stats;
+        renderer.extraction_error = None;
     }
 }
 
 impl RenderBackend for WgpuMeshRenderer {
     fn begin_frame(&mut self, _info: FrameInfo) {
         self.camera = None;
+        self.light = MeshLight::default();
         self.extraction_error = Some(MeshError::MissingExtraction);
         self.last_extraction = MeshExtractionStats::default();
         self.submitted_commands = 0;
@@ -163,11 +230,11 @@ impl RenderBackend for WgpuMeshRenderer {
     fn end_frame(&mut self) -> FrameStats {
         self.last_result = Some(match self.extraction_error.take() {
             Some(error) => Err(error),
-            None => self.gpu.render(self.camera, self.extractor.draws()),
+            None => self
+                .gpu
+                .render_lit(self.camera, self.light, self.extractor.draws()),
         });
         FrameStats {
-            // Preserve the legacy diagnostic's camera/translation command meaning.
-            // Mesh draw calls and triangles have their own MeshFrameReport counters.
             submitted_commands: self.submitted_commands,
             drawn_pixels: 0,
         }
@@ -175,9 +242,7 @@ impl RenderBackend for WgpuMeshRenderer {
 }
 
 impl Engine<WgpuMeshRenderer> {
-    /// Attaches actual mesh extraction to the normal validated Engine::tick path.
-    /// Graph errors still reject before App/backend work; GPU errors are available
-    /// from renderer().last_mesh_result() and do not roll back simulation.
+    /// Attaches actual mesh/light extraction to the normal validated Engine::tick path.
     pub fn with_mesh_renderer(renderer: WgpuMeshRenderer, config: EngineConfig) -> Self {
         let mut engine = Self::with_renderer(renderer, config);
         engine.set_backend_extractor(WgpuMeshRenderer::extract);

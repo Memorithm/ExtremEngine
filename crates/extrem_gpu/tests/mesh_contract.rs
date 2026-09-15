@@ -1,5 +1,6 @@
 use extrem_gpu::{
-    MAX_FRAME_DRAWS, MeshData, MeshDraw, MeshError, MeshVertex, validate_extent, validate_frame,
+    MAX_FRAME_DRAWS, MeshData, MeshDraw, MeshError, MeshLight, MeshVertex, shade_lambert,
+    transform_normal_reference, validate_extent, validate_frame, validate_lit_frame,
 };
 
 fn vertices() -> Vec<MeshVertex> {
@@ -35,12 +36,44 @@ fn draw() -> MeshDraw {
     }
 }
 
+fn approx(actual: f32, expected: f32) {
+    assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+}
+
 #[test]
-fn valid_geometry_is_immutable_and_has_exact_payload_accounting() {
+fn generated_normals_are_normalized_and_payload_accounts_for_them() {
     let mesh = MeshData::new(vertices(), vec![0, 1, 2]).unwrap();
     assert_eq!(mesh.vertices(), vertices());
     assert_eq!(mesh.indices(), [0, 1, 2]);
-    assert_eq!(mesh.payload_bytes(), 84);
+    assert_eq!(mesh.payload_bytes(), 120);
+    for normal in mesh.normals() {
+        approx(normal[0], 0.0);
+        approx(normal[1], 0.0);
+        approx(normal[2], 1.0);
+    }
+}
+
+#[test]
+fn explicit_normals_are_normalized_and_invalid_normals_rejected() {
+    let mesh = MeshData::new_with_normals(
+        vertices(),
+        vec![[0.0, 0.0, 2.0]; 3],
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    assert_eq!(mesh.normals(), [[0.0, 0.0, 1.0]; 3]);
+    assert_eq!(
+        MeshData::new_with_normals(vertices(), vec![[0.0, 0.0, 1.0]; 2], vec![0, 1, 2])
+            .unwrap_err(),
+        MeshError::InvalidNormal
+    );
+    for normal in [[0.0, 0.0, 0.0], [f32::NAN, 0.0, 1.0]] {
+        assert_eq!(
+            MeshData::new_with_normals(vertices(), vec![normal; 3], vec![0, 1, 2])
+                .unwrap_err(),
+            MeshError::InvalidNormal
+        );
+    }
 }
 
 #[test]
@@ -95,6 +128,66 @@ fn alpha_blending_is_explicitly_unsupported_not_silently_opaque() {
 }
 
 #[test]
+fn normal_transform_handles_nonuniform_and_mirrored_scales() {
+    let mut model = identity();
+    model[0] = 2.0;
+    model[5] = 4.0;
+    let normal = transform_normal_reference(&model, [1.0, 1.0, 0.0]).unwrap();
+    let length = (0.5_f32 * 0.5 + 0.25 * 0.25).sqrt();
+    approx(normal[0], 0.5 / length);
+    approx(normal[1], 0.25 / length);
+    let mut mirrored = identity();
+    mirrored[0] = -2.0;
+    assert_eq!(
+        transform_normal_reference(&mirrored, [1.0, 0.0, 0.0]).unwrap(),
+        [-1.0, 0.0, 0.0]
+    );
+    model[0] = 0.0;
+    assert_eq!(draw_with_model(model).validate(), Err(MeshError::InvalidNormalTransform));
+}
+
+fn draw_with_model(model: [f32; 16]) -> MeshDraw {
+    MeshDraw {
+        model,
+        ..draw()
+    }
+}
+
+#[test]
+fn lambert_reference_has_front_back_and_colored_light_contracts() {
+    let light = MeshLight {
+        direction_to_light: [0.0, 0.0, 2.0],
+        color: [1.0, 0.5, 0.25],
+        intensity: 0.5,
+        ambient: 0.25,
+    };
+    let front = shade_lambert([0.8, 0.4, 0.2], [0.0, 0.0, 1.0], light).unwrap();
+    approx(front[0], 0.6);
+    approx(front[1], 0.2);
+    approx(front[2], 0.075);
+    let back = shade_lambert([0.8, 0.4, 0.2], [0.0, 0.0, -1.0], light).unwrap();
+    approx(back[0], 0.2);
+    approx(back[1], 0.1);
+    approx(back[2], 0.05);
+}
+
+#[test]
+fn invalid_lights_are_rejected_before_gpu_submission() {
+    let mut light = MeshLight::default();
+    light.direction_to_light = [0.0; 3];
+    assert_eq!(
+        validate_lit_frame(&identity(), light, &[draw()]),
+        Err(MeshError::InvalidLight)
+    );
+    let mut light = MeshLight::default();
+    light.intensity = 17.0;
+    assert_eq!(light.validate(), Err(MeshError::InvalidLight));
+    light = MeshLight::default();
+    light.ambient = f32::NAN;
+    assert_eq!(light.validate(), Err(MeshError::InvalidLight));
+}
+
+#[test]
 fn rejects_nonfinite_and_overflowing_camera_model_composition() {
     let mut item = draw();
     item.model[0] = f32::NAN;
@@ -121,8 +214,11 @@ fn frame_count_and_extent_limits_are_checked_without_gpu_allocations() {
         validate_frame(&identity(), &draws),
         Err(MeshError::Capacity)
     );
-    for (w, h) in [(0, 1), (1, 0), (u32::MAX, 2), (4096, 4096)] {
-        assert_eq!(validate_extent(w, h, 4096), Err(MeshError::InvalidExtent));
+    for (width, height) in [(0, 1), (1, 0), (u32::MAX, 2), (4096, 4096)] {
+        assert_eq!(
+            validate_extent(width, height, 4096),
+            Err(MeshError::InvalidExtent)
+        );
     }
     assert!(validate_extent(3840, 2160, 4096).is_ok());
     assert!(validate_extent(65, 49, 4096).is_ok());

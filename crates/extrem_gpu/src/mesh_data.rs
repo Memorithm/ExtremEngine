@@ -1,4 +1,4 @@
-//! Validated indexed geometry and bounded frame inputs for the native mesh path.
+//! Validated indexed geometry, normals, lighting and bounded frame inputs.
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,12 +8,57 @@ pub const MAX_FRAME_DRAWS: usize = 4096;
 pub const MAX_RESIDENT_MESHES: usize = 256;
 pub const MAX_GEOMETRY_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_TARGET_PIXELS: u64 = 8_388_608;
+pub const MAX_LIGHT_INTENSITY: f32 = 16.0;
 
 /// A position and linear RGB vertex color. Geometry is triangle-list only.
+/// Normals are stored separately in `MeshData` so the original vertex API remains compatible.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshVertex {
     pub position: [f32; 3],
     pub color: [f32; 3],
+}
+
+/// One validated world-space directional light used by the native mesh path.
+/// `direction_to_light` points from the shaded surface toward the light source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshLight {
+    pub direction_to_light: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub ambient: f32,
+}
+
+impl Default for MeshLight {
+    /// Compatibility lighting: pure ambient white reproduces the previous unlit colors.
+    fn default() -> Self {
+        Self {
+            direction_to_light: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            intensity: 0.0,
+            ambient: 1.0,
+        }
+    }
+}
+
+impl MeshLight {
+    pub fn validate(self) -> Result<Self, MeshError> {
+        if !self
+            .direction_to_light
+            .iter()
+            .chain(self.color.iter())
+            .all(|value| value.is_finite())
+            || !self.intensity.is_finite()
+            || !self.ambient.is_finite()
+            || self.intensity < 0.0
+            || self.intensity > MAX_LIGHT_INTENSITY
+            || !(0.0..=1.0).contains(&self.ambient)
+            || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
+            || length_squared(self.direction_to_light) <= f32::EPSILON
+        {
+            return Err(MeshError::InvalidLight);
+        }
+        Ok(self)
+    }
 }
 
 /// CPU validation, capacity or GPU/readback failure; never a successful draw count.
@@ -23,8 +68,11 @@ pub enum MeshError {
     InvalidIndexCount,
     IndexOutOfBounds,
     InvalidVertex,
+    InvalidNormal,
+    InvalidNormalTransform,
     InvalidMatrix,
     InvalidColor,
+    InvalidLight,
     MissingCamera,
     MissingExtraction,
     OutOfMemory,
@@ -47,21 +95,20 @@ impl std::error::Error for MeshError {}
 
 /// Immutable validated geometry, shareable between entities and GPU cache entries.
 ///
-/// Construction validates before taking an Arc snapshot. Degenerate triangles are
-/// permitted; this is index/numeric validation, not manifold or topology repair.
-/// The limits bound accepted geometry, not the caller's already-allocated vectors.
+/// `new` derives area-weighted smooth normals from triangle winding. Vertices touched
+/// only by degenerate triangles receive a +Z fallback normal so legacy degenerate test
+/// geometry remains accepted. `new_with_normals` accepts explicit normals for authored
+/// hard edges. Explicit normals are normalized once during construction.
 #[derive(Debug)]
 pub struct MeshData {
     vertices: Vec<MeshVertex>,
+    normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
     position_bounds: [f64; 4],
 }
 
 impl MeshData {
-    /// Constructs finite triangle-list geometry with in-bounds u32 indices.
-    ///
-    /// # Errors
-    /// Rejects empty, oversized, non-finite, out-of-range-color or invalid indices.
+    /// Constructs finite triangle-list geometry and derives vertex normals.
     ///
     /// # Examples
     /// ```
@@ -73,33 +120,37 @@ impl MeshData {
     /// ];
     /// let mesh = MeshData::new(vertices, vec![0, 1, 2])?;
     /// assert_eq!(mesh.indices(), [0, 1, 2]);
+    /// assert!(mesh.normals()[0][2] > 0.99);
     /// # Ok::<(), extrem_gpu::MeshError>(())
     /// ```
     pub fn new(vertices: Vec<MeshVertex>, indices: Vec<u32>) -> Result<Arc<Self>, MeshError> {
-        if vertices.is_empty() || indices.is_empty() {
-            return Err(MeshError::EmptyGeometry);
+        validate_geometry(&vertices, &indices)?;
+        let normals = generate_normals(&vertices, &indices);
+        Self::finish(vertices, normals, indices)
+    }
+
+    /// Constructs geometry with explicit object-space vertex normals.
+    pub fn new_with_normals(
+        vertices: Vec<MeshVertex>,
+        normals: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+    ) -> Result<Arc<Self>, MeshError> {
+        validate_geometry(&vertices, &indices)?;
+        if normals.len() != vertices.len() {
+            return Err(MeshError::InvalidNormal);
         }
-        if vertices.len() > MAX_MESH_VERTICES || indices.len() > MAX_MESH_INDICES {
-            return Err(MeshError::Capacity);
-        }
-        if !indices.len().is_multiple_of(3) {
-            return Err(MeshError::InvalidIndexCount);
-        }
-        if vertices.iter().any(|v| {
-            !v.position.iter().all(|x| x.is_finite())
-                || !v
-                    .color
-                    .iter()
-                    .all(|x| x.is_finite() && (0.0..=1.0).contains(x))
-        }) {
-            return Err(MeshError::InvalidVertex);
-        }
-        if indices
-            .iter()
-            .any(|&index| index as usize >= vertices.len())
-        {
-            return Err(MeshError::IndexOutOfBounds);
-        }
+        let normals = normals
+            .into_iter()
+            .map(normalize_normal)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::finish(vertices, normals, indices)
+    }
+
+    fn finish(
+        vertices: Vec<MeshVertex>,
+        normals: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+    ) -> Result<Arc<Self>, MeshError> {
         let mut position_bounds = [0.0_f64, 0.0, 0.0, 1.0];
         for vertex in &vertices {
             for (bound, value) in position_bounds.iter_mut().zip(vertex.position) {
@@ -108,6 +159,7 @@ impl MeshData {
         }
         Ok(Arc::new(Self {
             vertices,
+            normals,
             indices,
             position_bounds,
         }))
@@ -117,17 +169,103 @@ impl MeshData {
         &self.vertices
     }
 
+    pub fn normals(&self) -> &[[f32; 3]] {
+        &self.normals
+    }
+
     pub fn indices(&self) -> &[u32] {
         &self.indices
     }
 
-    /// Exact vertex/index payload bytes; not allocator/GPU-driver overhead.
+    /// Exact uploaded vertex/normal/index payload bytes; excludes allocator/driver overhead.
     pub fn payload_bytes(&self) -> usize {
-        self.vertices.len() * 24 + self.indices.len() * 4
+        self.vertices.len() * 36 + self.indices.len() * 4
     }
 }
 
-/// One opaque, vertex-colored draw. Matrices are column-major, as in extrem_math.
+fn validate_geometry(vertices: &[MeshVertex], indices: &[u32]) -> Result<(), MeshError> {
+    if vertices.is_empty() || indices.is_empty() {
+        return Err(MeshError::EmptyGeometry);
+    }
+    if vertices.len() > MAX_MESH_VERTICES || indices.len() > MAX_MESH_INDICES {
+        return Err(MeshError::Capacity);
+    }
+    if !indices.len().is_multiple_of(3) {
+        return Err(MeshError::InvalidIndexCount);
+    }
+    if vertices.iter().any(|vertex| {
+        !vertex.position.iter().all(|value| value.is_finite())
+            || !vertex
+                .color
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    }) {
+        return Err(MeshError::InvalidVertex);
+    }
+    if indices
+        .iter()
+        .any(|&index| index as usize >= vertices.len())
+    {
+        return Err(MeshError::IndexOutOfBounds);
+    }
+    Ok(())
+}
+
+fn generate_normals(vertices: &[MeshVertex], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut accumulated = vec![[0.0_f64; 3]; vertices.len()];
+    for triangle in indices.chunks_exact(3) {
+        let a = vertices[triangle[0] as usize].position.map(f64::from);
+        let b = vertices[triangle[1] as usize].position.map(f64::from);
+        let c = vertices[triangle[2] as usize].position.map(f64::from);
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let face = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        if face.iter().all(|value| value.is_finite()) {
+            for &index in triangle {
+                let normal = &mut accumulated[index as usize];
+                for axis in 0..3 {
+                    normal[axis] += face[axis];
+                }
+            }
+        }
+    }
+    accumulated
+        .into_iter()
+        .map(|normal| {
+            let length = (normal[0] * normal[0]
+                + normal[1] * normal[1]
+                + normal[2] * normal[2])
+                .sqrt();
+            if length.is_finite() && length > 0.0 {
+                [
+                    (normal[0] / length) as f32,
+                    (normal[1] / length) as f32,
+                    (normal[2] / length) as f32,
+                ]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        })
+        .collect()
+}
+
+fn normalize_normal(normal: [f32; 3]) -> Result<[f32; 3], MeshError> {
+    if !normal.iter().all(|value| value.is_finite()) {
+        return Err(MeshError::InvalidNormal);
+    }
+    let length_squared = length_squared(normal);
+    if length_squared <= f32::EPSILON {
+        return Err(MeshError::InvalidNormal);
+    }
+    let inverse = length_squared.sqrt().recip();
+    Ok(normal.map(|value| value * inverse))
+}
+
+/// One opaque vertex-colored draw. Matrices are column-major, as in extrem_math.
 #[derive(Clone, Debug)]
 pub struct MeshDraw {
     pub mesh: Arc<MeshData>,
@@ -139,10 +277,11 @@ pub struct MeshDraw {
 impl MeshDraw {
     pub fn validate(&self) -> Result<(), MeshError> {
         validate_matrix(&self.model)?;
+        validate_normal_transform(&self.model)?;
         if !self
             .color
             .iter()
-            .all(|x| x.is_finite() && (0.0..=1.0).contains(x))
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
             || self.color[3] != 1.0
         {
             return Err(MeshError::InvalidColor);
@@ -152,21 +291,48 @@ impl MeshDraw {
 }
 
 pub fn validate_matrix(matrix: &[f32; 16]) -> Result<(), MeshError> {
-    if !matrix.iter().all(|x| x.is_finite()) {
+    if !matrix.iter().all(|value| value.is_finite()) {
         return Err(MeshError::InvalidMatrix);
     }
     Ok(())
 }
 
-/// Checks matrices and conservative transformed-position bounds before submission.
-/// Bounds are cached once per geometry, not recomputed per vertex on every frame.
-/// Extreme inputs may be conservatively rejected even when cancellation would yield
-/// finite coordinates; this is deliberate rather than backend-dependent clipping.
+/// Rejects singular or f32-overflowing model bases before the shader constructs a normal matrix.
+pub fn validate_normal_transform(model: &[f32; 16]) -> Result<(), MeshError> {
+    let c0 = [model[0], model[1], model[2]];
+    let c1 = [model[4], model[5], model[6]];
+    let c2 = [model[8], model[9], model[10]];
+    let cofactors = [cross(c1, c2), cross(c2, c0), cross(c0, c1)];
+    if cofactors
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(MeshError::InvalidNormalTransform);
+    }
+    let determinant = dot(c0, cofactors[0]);
+    if !determinant.is_finite() || determinant.abs() < f32::MIN_POSITIVE {
+        return Err(MeshError::InvalidNormalTransform);
+    }
+    Ok(())
+}
+
+/// Compatibility validation using ambient-only lighting.
 pub fn validate_frame(camera: &[f32; 16], draws: &[MeshDraw]) -> Result<(), MeshError> {
+    validate_lit_frame(camera, MeshLight::default(), draws)
+}
+
+/// Checks lighting, matrices and conservative transformed-position bounds before submission.
+pub fn validate_lit_frame(
+    camera: &[f32; 16],
+    light: MeshLight,
+    draws: &[MeshDraw],
+) -> Result<(), MeshError> {
     if draws.len() > MAX_FRAME_DRAWS {
         return Err(MeshError::Capacity);
     }
     validate_matrix(camera)?;
+    light.validate()?;
     for draw in draws {
         draw.validate()?;
         let world_bounds = transform_bounds(&draw.model, draw.mesh.position_bounds)?;
@@ -185,6 +351,52 @@ pub fn validate_frame(camera: &[f32; 16], draws: &[MeshDraw]) -> Result<(), Mesh
     Ok(())
 }
 
+/// CPU reference for the shader's normal transform, including mirrored models.
+pub fn transform_normal_reference(
+    model: &[f32; 16],
+    normal: [f32; 3],
+) -> Result<[f32; 3], MeshError> {
+    validate_normal_transform(model)?;
+    let normal = normalize_normal(normal)?;
+    let c0 = [model[0], model[1], model[2]];
+    let c1 = [model[4], model[5], model[6]];
+    let c2 = [model[8], model[9], model[10]];
+    let cof0 = cross(c1, c2);
+    let cof1 = cross(c2, c0);
+    let cof2 = cross(c0, c1);
+    let orientation = if dot(c0, cof0).is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    };
+    normalize_normal([
+        orientation * (cof0[0] * normal[0] + cof1[0] * normal[1] + cof2[0] * normal[2]),
+        orientation * (cof0[1] * normal[0] + cof1[1] * normal[1] + cof2[1] * normal[2]),
+        orientation * (cof0[2] * normal[0] + cof1[2] * normal[1] + cof2[2] * normal[2]),
+    ])
+}
+
+/// CPU Lambert reference for pixel qualification. Values are linear and clamped to one.
+pub fn shade_lambert(
+    base_color: [f32; 3],
+    world_normal: [f32; 3],
+    light: MeshLight,
+) -> Result<[f32; 3], MeshError> {
+    if !base_color
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    {
+        return Err(MeshError::InvalidColor);
+    }
+    let light = light.validate()?;
+    let normal = normalize_normal(world_normal)?;
+    let direction = normalize_normal(light.direction_to_light)?;
+    let diffuse = dot(normal, direction).max(0.0) * light.intensity;
+    Ok(std::array::from_fn(|axis| {
+        (base_color[axis] * (light.ambient + light.color[axis] * diffuse)).clamp(0.0, 1.0)
+    }))
+}
+
 pub fn validate_extent(width: u32, height: u32, device_limit: u32) -> Result<(), MeshError> {
     if width == 0
         || height == 0
@@ -197,9 +409,6 @@ pub fn validate_extent(width: u32, height: u32, device_limit: u32) -> Result<(),
     Ok(())
 }
 
-// Absolute dot-product bounds cover intermediate products and any evaluation order.
-// Half the f32 range reserves a large margin for GPU f32 rounding; f64 arithmetic
-// prevents the validation calculation itself from overflowing on f32 inputs.
 fn transform_bounds(matrix: &[f32; 16], input: [f64; 4]) -> Result<[f64; 4], MeshError> {
     let mut output = [0.0; 4];
     for (row, bound) in output.iter_mut().enumerate() {
@@ -211,6 +420,22 @@ fn transform_bounds(matrix: &[f32; 16], input: [f64; 4]) -> Result<[f64; 4], Mes
         }
     }
     Ok(output)
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn length_squared(value: [f32; 3]) -> f32 {
+    dot(value, value)
 }
 
 #[cfg(test)]
@@ -244,7 +469,6 @@ mod bound_tests {
     fn finite_vertex_and_scale_overflow_is_rejected() {
         let mut item = draw([f32::MAX, 0.0, 0.0]);
         item.model[0] = 2.0;
-        assert!(item.validate().is_ok());
         assert_eq!(
             validate_frame(&identity(), &[item]),
             Err(MeshError::InvalidMatrix)

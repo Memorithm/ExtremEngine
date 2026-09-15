@@ -1,7 +1,7 @@
 //! Native indexed mesh pipeline shared by offscreen and existing surface targets.
 use crate::mesh_data::{
     MAX_FRAME_DRAWS, MAX_GEOMETRY_BYTES, MAX_RESIDENT_MESHES, MeshData, MeshDraw, MeshError,
-    validate_extent, validate_frame,
+    MeshLight, validate_extent, validate_lit_frame,
 };
 use crate::mesh_safety::GpuScopes;
 use crate::{GpuContext, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
@@ -12,8 +12,9 @@ use std::time::Duration;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const INSTANCE_STRIDE: usize = 80;
+const FRAME_UNIFORM_BYTES: usize = 96;
 const IDENTITY: [f32; 16] = [
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
 /// Submission observations, not GPU elapsed time or completed-on-screen evidence.
@@ -33,9 +34,8 @@ struct UploadedMesh {
     index: wgpu::Buffer,
 }
 
-/// Opaque vertex-color renderer. Uses GpuContext/SurfaceTarget rather than a second
-/// device-selection/surface implementation. Native blocking initialization/readback;
-/// browser async initialization is not implemented by this type.
+/// Opaque indexed renderer with vertex normals and one directional Lambert light.
+/// Uses GpuContext/SurfaceTarget rather than a second device/surface implementation.
 pub struct MeshRenderer {
     context: GpuContext,
     surface: Option<SurfaceTarget>,
@@ -45,8 +45,8 @@ pub struct MeshRenderer {
     color: Option<wgpu::Texture>,
     depth: wgpu::Texture,
     pipeline: wgpu::RenderPipeline,
-    camera: wgpu::Buffer,
-    camera_bind: wgpu::BindGroup,
+    frame_uniforms: wgpu::Buffer,
+    frame_bind: wgpu::BindGroup,
     instances: wgpu::Buffer,
     instance_bytes: Vec<u8>,
     cached: Vec<UploadedMesh>,
@@ -57,7 +57,7 @@ impl MeshRenderer {
     /// Creates a readable RGBA8 offscreen target. A missing adapter returns an error.
     pub fn headless(width: u32, height: u32) -> Result<Self, MeshError> {
         validate_extent(width, height, 4096)?;
-        let context = GpuContext::headless().map_err(|e| MeshError::Gpu(e.to_string()))?;
+        let context = GpuContext::headless().map_err(|error| MeshError::Gpu(error.to_string()))?;
         Self::new(context, None, width, height)
     }
 
@@ -69,7 +69,7 @@ impl MeshRenderer {
     ) -> Result<Self, MeshError> {
         validate_extent(width, height, 4096)?;
         let (context, surface) = GpuContext::for_surface(target, width, height)
-            .map_err(|e| MeshError::Gpu(e.to_string()))?;
+            .map_err(|error| MeshError::Gpu(error.to_string()))?;
         Self::new(context, Some(surface), width, height)
     }
 
@@ -86,17 +86,21 @@ impl MeshRenderer {
             .map_or(wgpu::TextureFormat::Rgba8Unorm, SurfaceTarget::format);
         let scope = GpuScopes::new(device);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ExtremEngine indexed mesh shader"),
+            label: Some("ExtremEngine lit indexed mesh shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("mesh.wgsl"))),
         });
-        let vertices = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let vertices = wgpu::vertex_attr_array![
+            0 => Float32x3,
+            1 => Float32x3,
+            2 => Float32x3
+        ];
         let instances_layout = wgpu::vertex_attr_array![
-            2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
-            5 => Float32x4, 6 => Float32x4
+            3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
+            6 => Float32x4, 7 => Float32x4
         ];
         let buffers = [
             Some(wgpu::VertexBufferLayout {
-                array_stride: 24,
+                array_stride: 36,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &vertices,
             }),
@@ -112,7 +116,7 @@ impl MeshRenderer {
             write_mask: wgpu::ColorWrites::ALL,
         })];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ExtremEngine opaque indexed mesh pipeline"),
+            label: Some("ExtremEngine lit opaque indexed mesh pipeline"),
             layout: None,
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -140,18 +144,18 @@ impl MeshRenderer {
         });
         scope.check()?;
         let scope = GpuScopes::new(device);
-        let camera = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ExtremEngine mesh camera"),
-            size: 64,
+        let frame_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ExtremEngine mesh camera and light"),
+            size: FRAME_UNIFORM_BYTES as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ExtremEngine mesh camera binding"),
+        let frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ExtremEngine mesh frame binding"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera.as_entire_binding(),
+                resource: frame_uniforms.as_entire_binding(),
             }],
         });
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
@@ -174,8 +178,8 @@ impl MeshRenderer {
             color,
             depth,
             pipeline,
-            camera,
-            camera_bind,
+            frame_uniforms,
+            frame_bind,
             instances,
             instance_bytes: Vec::new(),
             cached: Vec::new(),
@@ -189,7 +193,6 @@ impl MeshRenderer {
     }
 
     /// Zero size suspends submission without configuring an invalid GPU surface.
-    /// Invalid nonzero dimensions leave the previous extent/resources unchanged.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<bool, MeshError> {
         if self.width == width && self.height == height {
             return Ok(false);
@@ -225,12 +228,20 @@ impl MeshRenderer {
         Ok(true)
     }
 
-    /// Validates a whole frame before upload/encoding. Reuses geometry by live Arc
-    /// identity; each draw has a distinct instance slot, so queue writes cannot make
-    /// every draw accidentally share the last transform/material.
+    /// Compatibility entry point: ambient-only lighting reproduces the previous colors.
     pub fn render(
         &mut self,
         camera: Option<[f32; 16]>,
+        draws: &[MeshDraw],
+    ) -> Result<MeshFrameReport, MeshError> {
+        self.render_lit(camera, MeshLight::default(), draws)
+    }
+
+    /// Validates a whole lit frame before upload/encoding.
+    pub fn render_lit(
+        &mut self,
+        camera: Option<[f32; 16]>,
+        light: MeshLight,
         draws: &[MeshDraw],
     ) -> Result<MeshFrameReport, MeshError> {
         let camera = match camera {
@@ -238,7 +249,7 @@ impl MeshRenderer {
             None if draws.is_empty() => IDENTITY,
             None => return Err(MeshError::MissingCamera),
         };
-        validate_frame(&camera, draws)?;
+        validate_lit_frame(&camera, light, draws)?;
         let mut seen = HashSet::new();
         let mut bytes = 0usize;
         for draw in draws {
@@ -317,13 +328,26 @@ impl MeshRenderer {
                 self.instance_bytes.extend_from_slice(&value.to_le_bytes());
             }
         }
-        let mut camera_bytes = [0_u8; 64];
-        for (chunk, value) in camera_bytes.chunks_exact_mut(4).zip(camera) {
+        let mut frame_bytes = [0_u8; FRAME_UNIFORM_BYTES];
+        for (chunk, value) in frame_bytes[..64].chunks_exact_mut(4).zip(camera) {
+            chunk.copy_from_slice(&value.to_le_bytes());
+        }
+        let light_values = [
+            light.direction_to_light[0],
+            light.direction_to_light[1],
+            light.direction_to_light[2],
+            light.intensity,
+            light.color[0],
+            light.color[1],
+            light.color[2],
+            light.ambient,
+        ];
+        for (chunk, value) in frame_bytes[64..].chunks_exact_mut(4).zip(light_values) {
             chunk.copy_from_slice(&value.to_le_bytes());
         }
         self.context
             .queue()
-            .write_buffer(&self.camera, 0, &camera_bytes);
+            .write_buffer(&self.frame_uniforms, 0, &frame_bytes);
         if !draws.is_empty() {
             self.context
                 .queue()
@@ -333,7 +357,7 @@ impl MeshRenderer {
             self.context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("ExtremEngine mesh frame"),
+                    label: Some("ExtremEngine lit mesh frame"),
                 });
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -346,7 +370,7 @@ impl MeshRenderer {
                 },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ExtremEngine opaque meshes"),
+                label: Some("ExtremEngine lit opaque meshes"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
@@ -361,7 +385,7 @@ impl MeshRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.camera_bind, &[]);
+            pass.set_bind_group(0, &self.frame_bind, &[]);
             pass.set_vertex_buffer(1, self.instances.slice(..));
             for (instance, &slot) in slots.iter().enumerate() {
                 let mesh = &self.cached[slot];
@@ -405,7 +429,6 @@ impl MeshRenderer {
     }
 
     /// Reads the last submitted offscreen RGBA8 image with padded GPU rows removed.
-    /// Native blocking only, with bounded GPU/callback waits. Window targets reject it.
     pub fn read_rgba(&self) -> Result<Vec<u8>, MeshError> {
         if !self.has_frame || self.width == 0 || self.height == 0 {
             return Err(MeshError::ReadbackUnavailable);
@@ -501,9 +524,14 @@ fn target(
 }
 
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> UploadedMesh {
-    let mut vertices = Vec::with_capacity(source.vertices().len() * 24);
-    for vertex in source.vertices() {
-        for value in vertex.position.iter().chain(&vertex.color) {
+    let mut vertices = Vec::with_capacity(source.vertices().len() * 36);
+    for (vertex, normal) in source.vertices().iter().zip(source.normals()) {
+        for value in vertex
+            .position
+            .iter()
+            .chain(&vertex.color)
+            .chain(normal)
+        {
             vertices.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -511,10 +539,8 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> 
     for index in source.indices() {
         indices.extend_from_slice(&index.to_le_bytes());
     }
-    // Avoid mapped-at-creation helper access to an invalid buffer after OOM.
-    // Allocation and queue-write failures are captured by the caller's scopes.
     let vertex = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("ExtremEngine mesh vertices"),
+        label: Some("ExtremEngine lit mesh vertices"),
         size: vertices.len() as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
