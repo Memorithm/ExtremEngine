@@ -6,9 +6,14 @@ use extrem_scene::{GlobalTransform, Visibility};
 
 fn instance() -> MeshInstance {
     MeshInstance {
-        geometry: MeshData::new(vec![
-            MeshVertex { position: [0.0; 3], color: [1.0; 3] },
-        ], vec![0, 0, 0]).unwrap(),
+        geometry: MeshData::new(
+            vec![MeshVertex {
+                position: [0.0; 3],
+                color: [1.0; 3],
+            }],
+            vec![0, 0, 0],
+        )
+        .unwrap(),
         color: [1.0; 4],
     }
 }
@@ -20,7 +25,12 @@ fn visible_meshes_use_global_precedence_and_deterministic_entity_order() {
     let b = world.spawn(Transform::from_translation(Vec3::Y));
     world.insert(b, instance()).unwrap();
     world.insert(a, instance()).unwrap();
-    world.insert(a, GlobalTransform(Transform::from_translation(Vec3::new(3.0, 0.0, 0.0)))).unwrap();
+    world
+        .insert(
+            a,
+            GlobalTransform(Transform::from_translation(Vec3::new(3.0, 0.0, 0.0))),
+        )
+        .unwrap();
     let mut extractor = MeshExtractor::default();
     assert_eq!(extractor.extract(&world).unwrap().visible, 2);
     assert_eq!(extractor.draws()[0].model[12], 3.0);
@@ -64,17 +74,29 @@ fn removed_recycled_and_replaced_world_entities_do_not_leak_draws() {
 }
 
 #[derive(Default)]
-struct Probe { open: bool, extracts: usize }
+struct Probe {
+    open: bool,
+    extracts: usize,
+}
 impl RenderBackend for Probe {
-    fn begin_frame(&mut self, _: FrameInfo) { self.open = true; }
-    fn submit(&mut self, _: RenderCommand) { assert!(self.open); }
-    fn end_frame(&mut self) -> FrameStats { self.open = false; FrameStats::default() }
+    fn begin_frame(&mut self, _: FrameInfo) {
+        self.open = true;
+    }
+    fn submit(&mut self, _: RenderCommand) {
+        assert!(self.open);
+    }
+    fn end_frame(&mut self) -> FrameStats {
+        self.open = false;
+        FrameStats::default()
+    }
 }
 
 #[test]
 fn actual_engine_hook_runs_after_stages_and_never_on_rejected_graph() {
     let mut engine = Engine::with_renderer(Probe::default(), Default::default());
-    engine.app_mut().add_systems(Stage::Render, |world, _| { world.insert_resource(42_u32); });
+    engine.app_mut().add_systems(Stage::Render, |world, _| {
+        world.insert_resource(42_u32);
+    });
     engine.set_backend_extractor(|world, probe| {
         assert!(probe.open);
         assert_eq!(world.get_resource::<u32>(), Some(&42));
@@ -84,7 +106,10 @@ fn actual_engine_hook_runs_after_stages_and_never_on_rejected_graph() {
     engine.render_graph_mut().add_dependency(bad, bad).unwrap();
     assert!(engine.tick(0.0).is_err());
     assert_eq!(engine.renderer().extracts, 0);
-    engine.render_graph_mut().remove_dependency(bad, bad).unwrap();
+    engine
+        .render_graph_mut()
+        .remove_dependency(bad, bad)
+        .unwrap();
     engine.tick(0.0).unwrap();
     assert_eq!(engine.renderer().extracts, 1);
     assert!(!engine.renderer().open);
@@ -98,4 +123,18 @@ fn viewport_updates_reject_nonfinite_or_nonpositive_aspect() {
         assert!(!engine.set_viewport_aspect(value));
         assert_eq!(engine.config().viewport_aspect, 2.0);
     }
+}
+
+#[test]
+fn visible_draw_limit_rejects_without_retaining_partial_output() {
+    let mut world = World::new();
+    let component = instance();
+    for _ in 0..=extrem_gpu::MAX_FRAME_DRAWS {
+        let entity = world.spawn(Transform::IDENTITY);
+        world.insert(entity, component.clone()).unwrap();
+    }
+    let mut extractor = MeshExtractor::default();
+    assert_eq!(extractor.extract(&world), Err(MeshError::Capacity));
+    assert!(extractor.draws().is_empty());
+    assert_eq!(extractor.extract(&World::new()).unwrap().visible, 0);
 }

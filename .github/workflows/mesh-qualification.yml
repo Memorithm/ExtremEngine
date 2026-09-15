@@ -26,21 +26,6 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - name: Export temporary offline formatting diagnostics
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dev-snapshot
-          git rev-parse HEAD > dev-snapshot/revision.txt
-          cargo fmt --all
-          git diff --binary > dev-snapshot/source-format.patch
-          git diff --name-only > dev-snapshot/formatted-paths.txt
-          git restore --worktree .
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mesh-format-diagnostics-${{ github.run_id }}
-          path: dev-snapshot/
-          retention-days: 1
       - name: CPU contracts and documentation
         run: |
           cargo test -p extrem_gpu -p extrem_engine --all-targets --locked

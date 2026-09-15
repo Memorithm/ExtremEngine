@@ -26,6 +26,7 @@ pub enum MeshError {
     InvalidMatrix,
     InvalidColor,
     MissingCamera,
+    MissingExtraction,
     Capacity,
     InvalidExtent,
     ReadbackUnavailable,
@@ -72,10 +73,7 @@ impl MeshData {
     /// assert_eq!(mesh.indices(), [0, 1, 2]);
     /// # Ok::<(), extrem_gpu::MeshError>(())
     /// ```
-    pub fn new(
-        vertices: Vec<MeshVertex>,
-        indices: Vec<u32>,
-    ) -> Result<Arc<Self>, MeshError> {
+    pub fn new(vertices: Vec<MeshVertex>, indices: Vec<u32>) -> Result<Arc<Self>, MeshError> {
         if vertices.is_empty() || indices.is_empty() {
             return Err(MeshError::EmptyGeometry);
         }
@@ -87,11 +85,17 @@ impl MeshData {
         }
         if vertices.iter().any(|v| {
             !v.position.iter().all(|x| x.is_finite())
-                || !v.color.iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x))
+                || !v
+                    .color
+                    .iter()
+                    .all(|x| x.is_finite() && (0.0..=1.0).contains(x))
         }) {
             return Err(MeshError::InvalidVertex);
         }
-        if indices.iter().any(|&index| index as usize >= vertices.len()) {
+        if indices
+            .iter()
+            .any(|&index| index as usize >= vertices.len())
+        {
             return Err(MeshError::IndexOutOfBounds);
         }
         Ok(Arc::new(Self { vertices, indices }))
@@ -123,7 +127,10 @@ pub struct MeshDraw {
 impl MeshDraw {
     pub fn validate(&self) -> Result<(), MeshError> {
         validate_matrix(&self.model)?;
-        if !self.color.iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x))
+        if !self
+            .color
+            .iter()
+            .all(|x| x.is_finite() && (0.0..=1.0).contains(x))
             || self.color[3] != 1.0
         {
             return Err(MeshError::InvalidColor);

@@ -41,11 +41,16 @@ impl MeshExtractor {
         self.draws.clear();
         let mut stats = MeshExtractionStats::default();
         for (entity, instance) in world.iter::<MeshInstance>() {
-            if world.get::<Visibility>(entity).is_some_and(|visibility| !visibility.0) {
+            if world
+                .get::<Visibility>(entity)
+                .is_some_and(|visibility| !visibility.0)
+            {
                 stats.hidden += 1;
                 continue;
             }
-            let transform = world.get::<GlobalTransform>(entity).map(|global| global.0)
+            let transform = world
+                .get::<GlobalTransform>(entity)
+                .map(|global| global.0)
                 .or_else(|| world.get::<Transform>(entity).copied());
             let Some(transform) = transform else {
                 stats.missing_transform += 1;
@@ -72,7 +77,8 @@ impl MeshExtractor {
         }
         self.items.sort_unstable_by_key(|(entity, _)| *entity);
         stats.visible = self.items.len();
-        self.draws.extend(self.items.drain(..).map(|(_, draw)| draw));
+        self.draws
+            .extend(self.items.drain(..).map(|(_, draw)| draw));
         Ok(stats)
     }
 
@@ -127,7 +133,10 @@ impl WgpuMeshRenderer {
 
     fn extract(world: &World, renderer: &mut Self) {
         match renderer.extractor.extract(world) {
-            Ok(stats) => renderer.last_extraction = stats,
+            Ok(stats) => {
+                renderer.last_extraction = stats;
+                renderer.extraction_error = None;
+            }
             Err(error) => renderer.extraction_error = Some(error),
         }
     }
@@ -136,14 +145,17 @@ impl WgpuMeshRenderer {
 impl RenderBackend for WgpuMeshRenderer {
     fn begin_frame(&mut self, _info: FrameInfo) {
         self.camera = None;
-        self.extraction_error = None;
+        self.extraction_error = Some(MeshError::MissingExtraction);
         self.last_extraction = MeshExtractionStats::default();
         self.submitted_commands = 0;
     }
 
     fn submit(&mut self, command: RenderCommand) {
         self.submitted_commands += 1;
-        if let RenderCommand::SetCamera { view_projection, .. } = command {
+        if let RenderCommand::SetCamera {
+            view_projection, ..
+        } = command
+        {
             self.camera = Some(view_projection.data);
         }
     }

@@ -46,11 +46,13 @@ for the user to close. The existing window host/frame pacing is not redesigned.
 
 `tick` still returns its existing RenderGraphError; rejected graphs never run the
 new extraction hook. This is not a transaction covering GPU errors after simulation.
-Check `renderer().last_mesh_result()` as well: an Err is a mesh validation/GPU failure;
-an Ok with submitted=false is surface unavailability/suspension, not a rendered
-frame. FrameStats keeps the prior camera/translation command-count meaning; actual
-mesh draw/triangle/upload counts live in MeshFrameReport. drawn_pixels remains zero
-because rasterized GPU pixel counts are not instrumented.
+Constructing the backend without its extraction hook fails with MissingExtraction;
+a stale batch is never silently reused. Check `renderer().last_mesh_result()` as well:
+an Err is a mesh validation/GPU failure; an Ok with submitted=false is surface
+unavailability/suspension, not a rendered frame. FrameStats keeps the prior
+camera/translation command-count meaning; actual mesh draw/triangle/upload counts
+live in MeshFrameReport. drawn_pixels remains zero because rasterized GPU pixel
+counts are not instrumented.
 
 Accepted limits: 1,000,000 vertices and 3,000,000 indices per mesh; 4,096 visible draws;
 256 unique meshes and 64 MiB vertex/index payload per frame/cache; at most 8,388,608

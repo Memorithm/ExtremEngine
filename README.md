@@ -12,14 +12,14 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 - `extrem_app` : stages, fixed timestep borné, signalement de dette de simulation abandonnée et assainissement du temps non fini.
 - `extrem_input` : clavier, souris et transitions de boutons.
 - `extrem_window` : boucle `winit`; les événements natifs sont effectivement injectés dans l'état `Input` avant chaque callback de frame.
-- `extrem_gpu` : contexte `wgpu`, surface de fenêtre avec gestion explicite des états d'acquisition et `WgpuPresenter` qui valide un chemin réel shader → render pass → draw → present.
+- `extrem_gpu` : contexte et surface `wgpu`, rendu natif de maillages indexés opaques avec profondeur, géométrie partagée et lecture hors écran. Le presenter de triangle reste un outil de validation distinct.
 - `extrem_render` : contrat de backend, renderer nul/CPU, render graph itératif avec plans immuables partagés, réemploi des noms de passes et suppression de dépendances pour réparation.
 - `extrem_web` : détection et validation des capacités d'exécution Web/WebGPU en contexte sécurisé.
 - `extrem_animation` : squelette, clips validés, sampling, nlerp/slerp, blending de poses, palette LBS et contrats transactionnels EEFP/VPAE expérimentaux.
 - `extrem_physics` : **solveur de référence minimal** (gravité + sol + box), avec validation des données. Ce n'est pas encore un solveur rigid-body général.
 - `extrem_science` : Euler/RK4 avec validation numérique et workspace RK4 réutilisable.
 - `extrem_audio` : contrat de commandes/backend audio et backend nul; sortie audio de production encore à implémenter.
-- `extrem_engine` : façade haut niveau, propagation et extraction réutilisables, sélection de caméra avant calcul, préparation partagée du render graph et frame fallible avant tout effet de simulation/rendu en cas de graphe invalide. Le backend WGPU reste un presenter de validation, pas encore un renderer complet de maillages.
+- `extrem_engine` : façade haut niveau, propagation et extraction réutilisables, sélection de caméra avant calcul, préparation partagée du render graph et frame fallible avant tout effet de simulation/rendu en cas de graphe invalide. Le backend `WgpuMeshRenderer` rend les composants `MeshInstance` ; le backend historique `WgpuRenderer` reste limité au triangle de validation.
 
 ## Programme de performance
 
@@ -29,7 +29,18 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 
 Les workflows `Scene Performance`, `Render Extraction Performance` et `Render Graph Performance` conservent les échantillons bruts, les SHA exécutés et l'environnement dans leurs artefacts. `docs/PERFORMANCE.md` décrit EE-PERF-01/02 ; `docs/RENDER_EXTRACTION.md` décrit EE-PERF-03. La libération explicite du buffer d'extraction est disponible via `Engine::release_render_scratch()`.
 
-Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions et leurs limites doivent être évalués à partir des sorties effectivement produites. La prochaine priorité produit est le rendu réel des maillages et matériaux dans la couche GPU existante, et non l'ajout indéfini de microbenchmarks isolés.
+Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions et leurs limites doivent être évalués à partir des sorties effectivement produites. Le premier rendu de maillages est maintenant implémenté dans la couche GPU existante. Les prochains chantiers portent sur les normales et l'éclairage, les textures et l'import de géométrie, puis la qualification matérielle.
+
+## Rendu natif de maillages
+
+`MeshData` valide les sommets et indices ; `MeshInstance` associe cette géométrie immuable à une entité et une couleur opaque. `Engine::with_mesh_renderer` utilise les transformations du monde, la caméra sélectionnée et `Visibility`. Le même pipeline indexé avec profondeur sert une fenêtre ou une cible hors écran. Il ne simule pas l'éclairage : les couleurs sont celles des sommets multipliées par la couleur de l'instance.
+
+```bash
+cargo run -p extrem_engine --example mesh_scene --locked
+cargo run -p extrem_engine --example mesh_scene --locked -- --headless mesh-cubes.ppm
+```
+
+La qualification `Mesh Qualification` exécute des contrôles de pixels avec WGPU, et échoue si aucun adaptateur n'est disponible. Son résultat sur un backend Vulkan logiciel n'est pas une mesure de performance GPU matérielle. Consulter `docs/MESH_RENDERING.md` pour les plafonds de ressources, les erreurs et la différence entre un tick accepté et une frame réellement soumise. PBR, textures, import glTF, transparence et skinning ne sont pas encore implémentés par ce pipeline.
 
 ## Erreurs de frame et migration d'API
 
@@ -60,4 +71,5 @@ La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, W
 - `docs/RENDER_EXTRACTION.md`
 - `docs/RENDER_GRAPH.md`
 - `docs/RENDER_PLAN_CACHE.md`
+- `docs/MESH_RENDERING.md`
 - `docs/SECURITY.md`
