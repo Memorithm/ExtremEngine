@@ -7,6 +7,7 @@ use crate::mesh_safety::GpuScopes;
 use crate::{GpuContext, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const INSTANCE_STRIDE: usize = 80;
 const FRAME_UNIFORM_BYTES: usize = 96;
 const IDENTITY: [f32; 16] = [
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
 /// Submission observations, not GPU elapsed time or completed-on-screen evidence.
@@ -22,7 +23,10 @@ const IDENTITY: [f32; 16] = [
 pub struct MeshFrameReport {
     pub submitted: bool,
     pub surface_status: Option<SurfaceFrameStatus>,
+    /// Logical visible mesh instances submitted by the caller.
     pub draw_calls: usize,
+    /// Actual `draw_indexed` commands encoded after conservative consecutive instancing.
+    pub encoded_draw_calls: usize,
     pub triangles: usize,
     pub uploaded_meshes: usize,
     pub resident_geometry_bytes: usize,
@@ -359,6 +363,7 @@ impl MeshRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("ExtremEngine lit mesh frame"),
                 });
+        let mut encoded_draw_calls = 0usize;
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view,
@@ -387,16 +392,12 @@ impl MeshRenderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.frame_bind, &[]);
             pass.set_vertex_buffer(1, self.instances.slice(..));
-            for (instance, &slot) in slots.iter().enumerate() {
+            encoded_draw_calls = visit_consecutive_batches(&slots, |slot, instances| {
                 let mesh = &self.cached[slot];
                 pass.set_vertex_buffer(0, mesh.vertex.slice(..));
                 pass.set_index_buffer(mesh.index.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(
-                    0..mesh.source.indices().len() as u32,
-                    0,
-                    instance as u32..instance as u32 + 1,
-                );
-            }
+                pass.draw_indexed(0..mesh.source.indices().len() as u32, 0, instances);
+            });
         }
         self.context.queue().submit(Some(encoder.finish()));
         if let Err(error) = scope.check() {
@@ -406,14 +407,14 @@ impl MeshRenderer {
         }
         if let Some(texture) = surface_texture {
             self.context.queue().present(texture);
-            if status == Some(SurfaceFrameStatus::Suboptimal) {
-                if let Some(surface) = &self.surface {
-                    let scope = GpuScopes::new(self.context.device());
-                    surface.reconfigure(self.context.device());
-                    if let Err(error) = scope.check() {
-                        self.has_frame = false;
-                        return Err(error);
-                    }
+            if status == Some(SurfaceFrameStatus::Suboptimal)
+                && let Some(surface) = &self.surface
+            {
+                let scope = GpuScopes::new(self.context.device());
+                surface.reconfigure(self.context.device());
+                if let Err(error) = scope.check() {
+                    self.has_frame = false;
+                    return Err(error);
                 }
             }
         }
@@ -422,7 +423,11 @@ impl MeshRenderer {
             submitted: true,
             surface_status: status,
             draw_calls: draws.len(),
-            triangles: draws.iter().map(|draw| draw.mesh.indices().len() / 3).sum(),
+            encoded_draw_calls,
+            triangles: draws
+                .iter()
+                .map(|draw| draw.mesh.indices().len() / 3)
+                .sum(),
             uploaded_meshes: uploaded,
             resident_geometry_bytes: bytes,
         })
@@ -433,7 +438,10 @@ impl MeshRenderer {
         if !self.has_frame || self.width == 0 || self.height == 0 {
             return Err(MeshError::ReadbackUnavailable);
         }
-        let texture = self.color.as_ref().ok_or(MeshError::ReadbackUnavailable)?;
+        let texture = self
+            .color
+            .as_ref()
+            .ok_or(MeshError::ReadbackUnavailable)?;
         let row = self.width.checked_mul(4).ok_or(MeshError::Capacity)?;
         let padded = row.div_ceil(256) * 256;
         let device = self.context.device();
@@ -495,6 +503,29 @@ impl MeshRenderer {
     }
 }
 
+/// Visits maximal consecutive runs with the same uploaded mesh slot.
+///
+/// This deliberately does not reorder slots: opaque equal-depth behavior remains identical to
+/// the caller's entity order, while adjacent instances of one geometry can share one GPU draw.
+fn visit_consecutive_batches(
+    slots: &[usize],
+    mut visit: impl FnMut(usize, Range<u32>),
+) -> usize {
+    let mut start = 0usize;
+    let mut batches = 0usize;
+    while start < slots.len() {
+        let slot = slots[start];
+        let mut end = start + 1;
+        while end < slots.len() && slots[end] == slot {
+            end += 1;
+        }
+        visit(slot, start as u32..end as u32);
+        batches += 1;
+        start = end;
+    }
+    batches
+}
+
 fn target(
     device: &wgpu::Device,
     width: u32,
@@ -552,5 +583,42 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> 
         source,
         vertex,
         index,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visit_consecutive_batches;
+
+    fn collect(slots: &[usize]) -> (usize, Vec<(usize, std::ops::Range<u32>)>) {
+        let mut batches = Vec::new();
+        let count = visit_consecutive_batches(slots, |slot, range| batches.push((slot, range)));
+        (count, batches)
+    }
+
+    #[test]
+    fn empty_input_encodes_no_draws() {
+        assert_eq!(collect(&[]), (0, Vec::new()));
+    }
+
+    #[test]
+    fn repeated_geometry_collapses_to_one_instanced_draw() {
+        assert_eq!(collect(&[4, 4, 4]), (1, vec![(4, 0..3)]));
+    }
+
+    #[test]
+    fn separated_geometry_is_never_reordered_for_batching() {
+        assert_eq!(
+            collect(&[0, 1, 0, 0, 1]),
+            (4, vec![(0, 0..1), (1, 1..2), (0, 2..4), (1, 4..5)])
+        );
+    }
+
+    #[test]
+    fn maximal_consecutive_runs_keep_original_instance_ranges() {
+        assert_eq!(
+            collect(&[2, 2, 1, 1, 1, 2]),
+            (3, vec![(2, 0..2), (1, 2..5), (2, 5..6)])
+        );
     }
 }
