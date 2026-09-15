@@ -424,10 +424,7 @@ impl MeshRenderer {
             surface_status: status,
             draw_calls: draws.len(),
             encoded_draw_calls,
-            triangles: draws
-                .iter()
-                .map(|draw| draw.mesh.indices().len() / 3)
-                .sum(),
+            triangles: draws.iter().map(|draw| draw.mesh.indices().len() / 3).sum(),
             uploaded_meshes: uploaded,
             resident_geometry_bytes: bytes,
         })
@@ -438,10 +435,7 @@ impl MeshRenderer {
         if !self.has_frame || self.width == 0 || self.height == 0 {
             return Err(MeshError::ReadbackUnavailable);
         }
-        let texture = self
-            .color
-            .as_ref()
-            .ok_or(MeshError::ReadbackUnavailable)?;
+        let texture = self.color.as_ref().ok_or(MeshError::ReadbackUnavailable)?;
         let row = self.width.checked_mul(4).ok_or(MeshError::Capacity)?;
         let padded = row.div_ceil(256) * 256;
         let device = self.context.device();
@@ -507,10 +501,7 @@ impl MeshRenderer {
 ///
 /// This deliberately does not reorder slots: opaque equal-depth behavior remains identical to
 /// the caller's entity order, while adjacent instances of one geometry can share one GPU draw.
-fn visit_consecutive_batches(
-    slots: &[usize],
-    mut visit: impl FnMut(usize, Range<u32>),
-) -> usize {
+fn visit_consecutive_batches(slots: &[usize], mut visit: impl FnMut(usize, Range<u32>)) -> usize {
     let mut start = 0usize;
     let mut batches = 0usize;
     while start < slots.len() {
