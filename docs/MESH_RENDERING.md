@@ -68,10 +68,19 @@ sizes are checked before resource changes. Lost/outdated surfaces are reconfigur
 once using the existing SurfaceTarget handling; suboptimal frames are presented and
 then reconfigured. Offscreen readback strips 256-byte row padding, rejects reads
 before a submitted frame or after resize, and uses bounded native poll/callback waits.
-It is not a browser async readback API. Validation scopes report native WGPU
-validation errors; allocation failure, device loss and user callback panics are not
-universally recovered. Finite matrices and their product are checked; this is not
-a guarantee against every extreme per-vertex floating-point overflow.
+It is not a browser async readback API. Nested native scopes capture Validation,
+OutOfMemory and Internal errors during pipeline/resource creation, uploads, draw
+submission, resize and readback copies. GPU out-of-memory is returned as
+MeshError::OutOfMemory; host allocation failure, device loss and user callback panics
+are not universally recovered. New resized targets are checked before replacing old
+ones, but a failed surface reconfiguration is not promised to roll back driver state.
+
+Geometry caches absolute homogeneous position bounds once. Frame validation applies
+absolute model and camera bounds in f64, leaving half of the f32 range as rounding
+margin. This rejects transformed-position overflow without rescanning every vertex
+of every instance. Cancellation-heavy extreme coordinates may be conservatively
+rejected; exact acceptance of every finite mathematical result is not promised.
+The frame also validates the camera/model product itself before GPU submission.
 
 ## Qualification, not performance claims
 
@@ -98,3 +107,14 @@ passes to actual GPU execution instead of treating its names as proof of schedul
 GPU work. Qualify window/surface recovery and performance on actual hardware before
 claiming a production renderer. Preserve existing graph rejection/recovery and
 negative benchmark results; a visible cube is not an AAA engine.
+
+### Review-driven safety tests
+
+Three CPU regressions cover finite vertices overflowing under model/camera transforms,
+conservative cancellation rejection and ordinary negative-scale/translation cases.
+Two tests exercise OOM-priority/error classification using constructed WGPU errors;
+these are not claims of induced physical GPU memory exhaustion. Actual pixel tests
+exercise the same scoped allocation/submission path under normal memory conditions.
+A replaced extraction hook is rejected with MissingExtraction, preserving the prior
+image instead of replaying old mesh draws. GPU workload/time quotas (including
+aggregate triangles/overdraw) remain separate from the accepted payload/draw caps.

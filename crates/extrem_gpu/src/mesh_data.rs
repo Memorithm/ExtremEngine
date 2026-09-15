@@ -27,6 +27,7 @@ pub enum MeshError {
     InvalidColor,
     MissingCamera,
     MissingExtraction,
+    OutOfMemory,
     Capacity,
     InvalidExtent,
     ReadbackUnavailable,
@@ -53,6 +54,7 @@ impl std::error::Error for MeshError {}
 pub struct MeshData {
     vertices: Vec<MeshVertex>,
     indices: Vec<u32>,
+    position_bounds: [f64; 4],
 }
 
 impl MeshData {
@@ -98,7 +100,17 @@ impl MeshData {
         {
             return Err(MeshError::IndexOutOfBounds);
         }
-        Ok(Arc::new(Self { vertices, indices }))
+        let mut position_bounds = [0.0_f64, 0.0, 0.0, 1.0];
+        for vertex in &vertices {
+            for (bound, value) in position_bounds.iter_mut().zip(vertex.position) {
+                *bound = bound.max(f64::from(value).abs());
+            }
+        }
+        Ok(Arc::new(Self {
+            vertices,
+            indices,
+            position_bounds,
+        }))
     }
 
     pub fn vertices(&self) -> &[MeshVertex] {
@@ -146,8 +158,10 @@ pub fn validate_matrix(matrix: &[f32; 16]) -> Result<(), MeshError> {
     Ok(())
 }
 
-/// Checks the full MVP numeric boundary without changing matrix multiplication order.
-/// Finite input matrices can overflow on composition, so test their product too.
+/// Checks matrices and conservative transformed-position bounds before submission.
+/// Bounds are cached once per geometry, not recomputed per vertex on every frame.
+/// Extreme inputs may be conservatively rejected even when cancellation would yield
+/// finite coordinates; this is deliberate rather than backend-dependent clipping.
 pub fn validate_frame(camera: &[f32; 16], draws: &[MeshDraw]) -> Result<(), MeshError> {
     if draws.len() > MAX_FRAME_DRAWS {
         return Err(MeshError::Capacity);
@@ -155,6 +169,8 @@ pub fn validate_frame(camera: &[f32; 16], draws: &[MeshDraw]) -> Result<(), Mesh
     validate_matrix(camera)?;
     for draw in draws {
         draw.validate()?;
+        let world_bounds = transform_bounds(&draw.model, draw.mesh.position_bounds)?;
+        transform_bounds(camera, world_bounds)?;
         for column in 0..4 {
             for row in 0..4 {
                 let value: f32 = (0..4)
@@ -179,4 +195,80 @@ pub fn validate_extent(width: u32, height: u32, device_limit: u32) -> Result<(),
         return Err(MeshError::InvalidExtent);
     }
     Ok(())
+}
+
+// Absolute dot-product bounds cover intermediate products and any evaluation order.
+// Half the f32 range reserves a large margin for GPU f32 rounding; f64 arithmetic
+// prevents the validation calculation itself from overflowing on f32 inputs.
+fn transform_bounds(matrix: &[f32; 16], input: [f64; 4]) -> Result<[f64; 4], MeshError> {
+    let mut output = [0.0; 4];
+    for (row, bound) in output.iter_mut().enumerate() {
+        *bound = (0..4)
+            .map(|column| f64::from(matrix[column * 4 + row]).abs() * input[column])
+            .sum();
+        if !bound.is_finite() || *bound > f64::from(f32::MAX) * 0.5 {
+            return Err(MeshError::InvalidMatrix);
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+
+    fn identity() -> [f32; 16] {
+        let mut matrix = [0.0; 16];
+        for index in [0, 5, 10, 15] {
+            matrix[index] = 1.0;
+        }
+        matrix
+    }
+
+    fn draw(position: [f32; 3]) -> MeshDraw {
+        MeshDraw {
+            mesh: MeshData::new(
+                vec![MeshVertex {
+                    position,
+                    color: [1.0; 3],
+                }],
+                vec![0, 0, 0],
+            )
+            .unwrap(),
+            model: identity(),
+            color: [1.0; 4],
+        }
+    }
+
+    #[test]
+    fn finite_vertex_and_scale_overflow_is_rejected() {
+        let mut item = draw([f32::MAX, 0.0, 0.0]);
+        item.model[0] = 2.0;
+        assert!(item.validate().is_ok());
+        assert_eq!(
+            validate_frame(&identity(), &[item]),
+            Err(MeshError::InvalidMatrix)
+        );
+    }
+
+    #[test]
+    fn camera_overflow_and_cancellation_are_rejected_conservatively() {
+        let item = draw([f32::MAX * 0.25, f32::MAX * 0.25, 0.0]);
+        let mut camera = identity();
+        camera[0] = 4.0;
+        camera[4] = -4.0;
+        assert_eq!(
+            validate_frame(&camera, &[item]),
+            Err(MeshError::InvalidMatrix)
+        );
+    }
+
+    #[test]
+    fn ordinary_negative_scale_translation_and_zero_bounds_are_valid() {
+        let mut item = draw([-100.0, 200.0, -0.0]);
+        item.model[0] = -2.0;
+        item.model[12] = 10_000.0;
+        assert!(validate_frame(&identity(), &[item]).is_ok());
+        assert!(validate_frame(&identity(), &[draw([0.0; 3])]).is_ok());
+    }
 }

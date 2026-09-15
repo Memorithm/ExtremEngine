@@ -3,12 +3,12 @@ use crate::mesh_data::{
     MAX_FRAME_DRAWS, MAX_GEOMETRY_BYTES, MAX_RESIDENT_MESHES, MeshData, MeshDraw, MeshError,
     validate_extent, validate_frame,
 };
+use crate::mesh_safety::GpuScopes;
 use crate::{GpuContext, SurfaceFrame, SurfaceFrameStatus, SurfaceTarget};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use wgpu::util::DeviceExt;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const INSTANCE_STRIDE: usize = 80;
@@ -84,7 +84,7 @@ impl MeshRenderer {
         let format = surface
             .as_ref()
             .map_or(wgpu::TextureFormat::Rgba8Unorm, SurfaceTarget::format);
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = GpuScopes::new(device);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ExtremEngine indexed mesh shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("mesh.wgsl"))),
@@ -138,6 +138,8 @@ impl MeshRenderer {
             multiview_mask: None,
             cache: None,
         });
+        scope.check()?;
+        let scope = GpuScopes::new(device);
         let camera = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ExtremEngine mesh camera"),
             size: 64,
@@ -162,7 +164,7 @@ impl MeshRenderer {
             .is_none()
             .then(|| target(device, width, height, format, true));
         let depth = target(device, width, height, DEPTH_FORMAT, false);
-        check_scope(scope)?;
+        scope.check()?;
         Ok(Self {
             context,
             surface,
@@ -200,12 +202,23 @@ impl MeshRenderer {
         }
         let device = self.context.device();
         validate_extent(width, height, device.limits().max_texture_dimension_2d)?;
+        let scope = GpuScopes::new(device);
+        let color = self
+            .surface
+            .is_none()
+            .then(|| target(device, width, height, self.format, true));
+        let depth = target(device, width, height, DEPTH_FORMAT, false);
+        scope.check()?;
         if let Some(surface) = &mut self.surface {
+            let scope = GpuScopes::new(device);
             surface.resize(device, width, height);
-        } else {
-            self.color = Some(target(device, width, height, self.format, true));
+            if let Err(error) = scope.check() {
+                self.has_frame = false;
+                return Err(error);
+            }
         }
-        self.depth = target(device, width, height, DEPTH_FORMAT, false);
+        self.color = color;
+        self.depth = depth;
         self.width = width;
         self.height = height;
         self.has_frame = false;
@@ -244,6 +257,7 @@ impl MeshRenderer {
                 ..MeshFrameReport::default()
             });
         }
+        let scope = GpuScopes::new(self.context.device());
         let acquired = self.surface.as_ref().map(|surface| {
             let mut frame = surface.acquire_frame();
             if matches!(
@@ -258,6 +272,7 @@ impl MeshRenderer {
         let (surface_texture, status) = match acquired {
             Some(SurfaceFrame::Renderable { texture, status }) => (Some(texture), Some(status)),
             Some(SurfaceFrame::Unavailable(status)) => {
+                scope.check()?;
                 return Ok(MeshFrameReport {
                     surface_status: Some(status),
                     ..MeshFrameReport::default()
@@ -276,10 +291,6 @@ impl MeshRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         self.cached
             .retain(|entry| seen.contains(&Arc::as_ptr(&entry.source)));
-        let scope = self
-            .context
-            .device()
-            .push_error_scope(wgpu::ErrorFilter::Validation);
         let mut uploaded = 0;
         let mut slots = Vec::with_capacity(draws.len());
         self.instance_bytes.clear();
@@ -291,7 +302,11 @@ impl MeshRenderer {
             {
                 Some(slot) => slot,
                 None => {
-                    let entry = upload(self.context.device(), Arc::clone(&draw.mesh));
+                    let entry = upload(
+                        self.context.device(),
+                        self.context.queue(),
+                        Arc::clone(&draw.mesh),
+                    );
                     self.cached.push(entry);
                     uploaded += 1;
                     self.cached.len() - 1
@@ -360,7 +375,7 @@ impl MeshRenderer {
             }
         }
         self.context.queue().submit(Some(encoder.finish()));
-        if let Err(error) = check_scope(scope) {
+        if let Err(error) = scope.check() {
             self.cached.clear();
             self.has_frame = false;
             return Err(error);
@@ -369,7 +384,12 @@ impl MeshRenderer {
             self.context.queue().present(texture);
             if status == Some(SurfaceFrameStatus::Suboptimal) {
                 if let Some(surface) = &self.surface {
+                    let scope = GpuScopes::new(self.context.device());
                     surface.reconfigure(self.context.device());
+                    if let Err(error) = scope.check() {
+                        self.has_frame = false;
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -394,6 +414,7 @@ impl MeshRenderer {
         let row = self.width.checked_mul(4).ok_or(MeshError::Capacity)?;
         let padded = row.div_ceil(256) * 256;
         let device = self.context.device();
+        let scope = GpuScopes::new(device);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ExtremEngine mesh readback"),
             size: u64::from(padded) * u64::from(self.height),
@@ -420,6 +441,7 @@ impl MeshRenderer {
             },
         );
         let submission = self.context.queue().submit(Some(encoder.finish()));
+        scope.check()?;
         let (sender, receiver) = mpsc::sync_channel(1);
         buffer
             .slice(..)
@@ -447,13 +469,6 @@ impl MeshRenderer {
         drop(mapped);
         buffer.unmap();
         Ok(output)
-    }
-}
-
-fn check_scope(scope: wgpu::ErrorScopeGuard) -> Result<(), MeshError> {
-    match pollster::block_on(scope.pop()) {
-        Some(error) => Err(MeshError::Gpu(error.to_string())),
-        None => Ok(()),
     }
 }
 
@@ -485,7 +500,7 @@ fn target(
     })
 }
 
-fn upload(device: &wgpu::Device, source: Arc<MeshData>) -> UploadedMesh {
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, source: Arc<MeshData>) -> UploadedMesh {
     let mut vertices = Vec::with_capacity(source.vertices().len() * 24);
     for vertex in source.vertices() {
         for value in vertex.position.iter().chain(&vertex.color) {
@@ -496,16 +511,22 @@ fn upload(device: &wgpu::Device, source: Arc<MeshData>) -> UploadedMesh {
     for index in source.indices() {
         indices.extend_from_slice(&index.to_le_bytes());
     }
-    let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    // Avoid mapped-at-creation helper access to an invalid buffer after OOM.
+    // Allocation and queue-write failures are captured by the caller's scopes.
+    let vertex = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("ExtremEngine mesh vertices"),
-        contents: &vertices,
-        usage: wgpu::BufferUsages::VERTEX,
+        size: vertices.len() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
-    let index = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let index = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("ExtremEngine mesh indices"),
-        contents: &indices,
-        usage: wgpu::BufferUsages::INDEX,
+        size: indices.len() as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
+    queue.write_buffer(&vertex, 0, &vertices);
+    queue.write_buffer(&index, 0, &indices);
     UploadedMesh {
         source,
         vertex,

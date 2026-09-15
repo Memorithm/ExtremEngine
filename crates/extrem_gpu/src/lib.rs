@@ -9,3 +9,4 @@ pub use mesh_data::{
 };
 mod mesh_renderer;
 pub use mesh_renderer::{MeshFrameReport, MeshRenderer};
+mod mesh_safety;
