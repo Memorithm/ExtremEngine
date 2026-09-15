@@ -7,10 +7,10 @@ use extrem_scene::GlobalTransform;
 use std::hint::black_box;
 use std::time::Instant;
 
-#[path = "../tests/support/extraction_fixture.rs"]
-mod support;
 #[path = "../tests/support/legacy_extraction.rs"]
 mod legacy;
+#[path = "../tests/support/extraction_fixture.rs"]
+mod support;
 use support::{Capture, Profile, fingerprint, fixture};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,7 +29,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("# warmup={WARMUP},samples={SAMPLES},unit=nanoseconds");
     println!("# capture=preallocated,parity=all_command_bits_after_each_sample");
     println!("# command_bytes={}", std::mem::size_of::<RenderCommand>());
-    println!("# scratch_entry_bytes={}", std::mem::size_of::<(Entity, Vec3)>());
+    println!(
+        "# legacy_entry_bytes={}",
+        std::mem::size_of::<(Entity, RenderCommand)>()
+    );
+    println!(
+        "# scratch_entry_bytes={}",
+        std::mem::size_of::<(Entity, Vec3)>()
+    );
     println!("# raw,profile,nodes,implementation,sample,ns");
     println!("# summary,profile,nodes,implementation,median_ns,p95_ns");
 

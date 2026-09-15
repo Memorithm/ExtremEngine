@@ -4,10 +4,10 @@ use extrem_math::{Transform, Vec3};
 use extrem_render::{RenderBackend, RenderCommand};
 use extrem_scene::{Camera, GlobalTransform, Visibility};
 
-#[path = "support/extraction_fixture.rs"]
-mod support;
 #[path = "support/legacy_extraction.rs"]
 mod legacy;
+#[path = "support/extraction_fixture.rs"]
+mod support;
 use support::{Capture, Profile, fingerprint, fixture};
 
 fn assert_parity(
@@ -27,7 +27,10 @@ fn assert_parity(
         new.commands.len(),
         stats.transform_commands + usize::from(stats.selected_camera.is_some())
     );
-    assert_eq!(stats.camera_matrices, usize::from(stats.selected_camera.is_some()));
+    assert_eq!(
+        stats.camera_matrices,
+        usize::from(stats.selected_camera.is_some())
+    );
     stats
 }
 
@@ -83,7 +86,11 @@ fn all_256_component_presence_patterns_match_an_independent_oracle() {
         let mut actual = Capture::default();
         let mut extractor = RenderExtractor::default();
         extractor.submit(&world, 1.0, &mut actual);
-        assert_eq!(fingerprint(&actual.commands), fingerprint(&expected), "{code}");
+        assert_eq!(
+            fingerprint(&actual.commands),
+            fingerprint(&expected),
+            "{code}"
+        );
         assert_parity(&world, 1.0, &mut extractor);
     }
 }
@@ -151,7 +158,10 @@ fn nonfinite_translation_bits_and_invalid_aspect_behavior_match_legacy() {
     for id in &ids {
         world.remove::<Camera>(*id).unwrap();
     }
-    for (id, value) in ids.iter().zip([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0]) {
+    for (id, value) in ids
+        .iter()
+        .zip([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0])
+    {
         world.get_mut::<Transform>(*id).unwrap().translation.x = value;
     }
     let mut extractor = RenderExtractor::default();
@@ -189,9 +199,16 @@ fn actual_engine_submits_late_render_stage_edits_in_the_same_order() {
     let (world, ids) = fixture(Profile::Global, 16).unwrap();
     engine.app_mut().world = world;
     let id = ids[3];
-    engine.app_mut().add_systems(Stage::Render, move |world, time| {
-        world.get_mut::<GlobalTransform>(id).unwrap().0.translation.x = time.frame as f32;
-    });
+    engine
+        .app_mut()
+        .add_systems(Stage::Render, move |world, time| {
+            world
+                .get_mut::<GlobalTransform>(id)
+                .unwrap()
+                .0
+                .translation
+                .x = time.frame as f32;
+        });
     for _ in 0..4 {
         engine.tick(0.0);
         let mut reference = Capture::default();
@@ -214,6 +231,9 @@ fn engine_can_release_extraction_scratch_after_replacing_its_world() {
     engine.app_mut().world = World::new();
     engine.release_render_scratch();
     engine.tick(0.0);
-    assert_eq!(engine.last_extraction_stats(), RenderExtractionStats::default());
+    assert_eq!(
+        engine.last_extraction_stats(),
+        RenderExtractionStats::default()
+    );
     assert_eq!(engine.last_frame_stats().submitted_commands, 0);
 }

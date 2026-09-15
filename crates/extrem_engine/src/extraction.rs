@@ -103,7 +103,8 @@ impl RenderExtractor {
                 .map(|(entity, local)| (entity, local.translation)),
         );
         // Each component map has unique Entity keys, and the two sets are disjoint.
-        self.translations.sort_unstable_by_key(|(entity, _)| *entity);
+        self.translations
+            .sort_unstable_by_key(|(entity, _)| *entity);
         stats.transform_commands = self.translations.len();
         for &(entity, translation) in &self.translations {
             renderer.submit(RenderCommand::Transform {

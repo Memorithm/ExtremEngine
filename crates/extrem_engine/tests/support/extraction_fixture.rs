@@ -36,7 +36,10 @@ pub fn fixture(profile: Profile, nodes: usize) -> Result<(World, Vec<Entity>), W
         };
         let position = index as f32 / 32.0;
         if mode & 1 != 0 {
-            world.insert(id, Transform::from_translation(Vec3::new(position, -0.0, 1.0)))?;
+            world.insert(
+                id,
+                Transform::from_translation(Vec3::new(position, -0.0, 1.0)),
+            )?;
         }
         if mode & 2 != 0 {
             let transform = Transform::from_translation(Vec3::new(-position, 2.0, 3.0));
