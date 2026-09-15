@@ -55,12 +55,8 @@ fn generated_normals_are_normalized_and_payload_accounts_for_them() {
 
 #[test]
 fn explicit_normals_are_normalized_and_invalid_normals_rejected() {
-    let mesh = MeshData::new_with_normals(
-        vertices(),
-        vec![[0.0, 0.0, 2.0]; 3],
-        vec![0, 1, 2],
-    )
-    .unwrap();
+    let mesh =
+        MeshData::new_with_normals(vertices(), vec![[0.0, 0.0, 2.0]; 3], vec![0, 1, 2]).unwrap();
     assert_eq!(mesh.normals(), [[0.0, 0.0, 1.0]; 3]);
     assert_eq!(
         MeshData::new_with_normals(vertices(), vec![[0.0, 0.0, 1.0]; 2], vec![0, 1, 2])
@@ -69,8 +65,7 @@ fn explicit_normals_are_normalized_and_invalid_normals_rejected() {
     );
     for normal in [[0.0, 0.0, 0.0], [f32::NAN, 0.0, 1.0]] {
         assert_eq!(
-            MeshData::new_with_normals(vertices(), vec![normal; 3], vec![0, 1, 2])
-                .unwrap_err(),
+            MeshData::new_with_normals(vertices(), vec![normal; 3], vec![0, 1, 2]).unwrap_err(),
             MeshError::InvalidNormal
         );
     }
@@ -143,14 +138,14 @@ fn normal_transform_handles_nonuniform_and_mirrored_scales() {
         [-1.0, 0.0, 0.0]
     );
     model[0] = 0.0;
-    assert_eq!(draw_with_model(model).validate(), Err(MeshError::InvalidNormalTransform));
+    assert_eq!(
+        draw_with_model(model).validate(),
+        Err(MeshError::InvalidNormalTransform)
+    );
 }
 
 fn draw_with_model(model: [f32; 16]) -> MeshDraw {
-    MeshDraw {
-        model,
-        ..draw()
-    }
+    MeshDraw { model, ..draw() }
 }
 
 #[test]
