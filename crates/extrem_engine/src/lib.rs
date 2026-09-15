@@ -3,10 +3,10 @@ pub use extraction::{RenderExtractionStats, RenderExtractor};
 
 use extrem_app::{App, MinimalPlugins, UpdateReport};
 use extrem_ecs::World;
+pub use extrem_render::RenderGraphError;
 use extrem_render::{
     FrameInfo, FrameStats, NullRenderer, RenderBackend, RenderCommand, RenderGraph,
 };
-pub use extrem_render::RenderGraphError;
 
 pub use extrem_app::{Stage, Time};
 pub use extrem_assets::{AssetError, AssetId, AssetKey, AssetPathError, Assets, Handle};
