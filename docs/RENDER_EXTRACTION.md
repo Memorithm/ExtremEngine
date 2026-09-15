@@ -41,10 +41,11 @@ The following existing semantics are deliberately preserved:
 - Do not begin/end a frame inside the extractor: Engine retains that lifecycle.
 
 This is not mesh/material rendering, culling, instancing, GPU upload or a full-frame
-optimization claim. The subsequent graph-recovery increment now makes tick fallible
-and rejects invalid graphs before simulation/backend effects; see `RENDER_GRAPH.md`
-for the Result API and repair contract. Pass-name strings and the graph's owned
-compiled-plan clone remain outside the extraction optimization.
+optimization claim. The later graph-recovery increment makes tick fallible and
+rejects invalid graphs before simulation/backend effects; see `RENDER_GRAPH.md`.
+EE-PERF-04 separately removes repeated plan/pass-name copies from hot engine ticks;
+its distinct full-headless-tick measurement boundary is in `RENDER_PLAN_CACHE.md`.
+The extraction microbenchmark below remains unchanged and excludes that work.
 
 ## Validation and reproduction
 
@@ -56,7 +57,7 @@ EXTREM_BENCH_REVISION="$(git rev-parse HEAD)" \
   cargo run --release -p extrem_engine --example extraction_bench --locked
 ```
 
-Ten new tests compare every command, entity, order and matrix/translation bit with
+Ten tests compare every command, entity, order and matrix/translation bit with
 the old implementation. They include all 256 local/global presence patterns for
 four entities checked against an independent oracle; inactive/missing cameras;
 2,048 eligible cameras with exactly one matrix construction; global precedence;
@@ -82,18 +83,14 @@ are uploaded with the exact executed SHA, toolchain, OS, CPU, memory and RUSTFLA
 Record every regression; a small p95 sample is not a tail-latency qualification.
 A shared CI CPU microbenchmark cannot establish universal gains or game FPS.
 No wall-clock threshold is a CI gate. Existing security, MSRV and platform checks
-are retained; the new workflow additionally checks runtime parity and doctests.
+are retained; the workflow additionally checks runtime parity and doctests.
 
-## Next checkpoints
+## Next checkpoint
 
-The previously listed graph panic/error checkpoint is implemented separately;
-`RENDER_GRAPH.md` specifies rejected-frame behavior and recovery tests.
+The graph panic/error contract and shared-plan/pass-name checkpoints have separate
+implementations and tests in `RENDER_GRAPH.md` and `RENDER_PLAN_CACHE.md`.
+Next implement actual world mesh rendering in the existing GPU authority, followed
+by measured culling/batching/instancing. Do not confuse these markers with a
+completed game renderer or use LOD/DRS to hide correctness defects.
 
-1. Measure render-pass-name and compiled-plan copies, checking graph replacement
-   and version invalidation before attempting a cache optimization.
-2. Implement actual world mesh rendering in the existing GPU authority, followed
-   by measured culling/batching/instancing. Do not confuse these markers with a
-   completed game renderer or use LOD/DRS to hide correctness defects.
-
-No benchmark result is asserted by this document before execution. PR evidence
-records actual runs, negative results and validated merge checkpoints.
+PR evidence records actual runs, negative results and validated merge checkpoints.
