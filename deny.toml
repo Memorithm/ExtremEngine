@@ -104,8 +104,16 @@ confidence-threshold = 0.8
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
     # Each entry is the crate and version constraint, and its specific allow
-    # list
-    #{ allow = ["Zlib"], crate = "adler32" },
+    # list. ElasticXxx is an explicit optional Memorithm integration: keep its
+    # PolyForm licence exception scoped to the exact Elastic crate set instead
+    # of allowing PolyForm for every third-party dependency.
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-adapters@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-core@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-eir@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-kv@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-macros@0.1.0" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "elastic-runtime@0.1.0" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,
@@ -230,7 +238,7 @@ unknown-git = "deny"
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # List of URLs for allowed Git repositories
-allow-git = []
+allow-git = ["https://github.com/Memorithm/ElasticXxx.git"]
 
 [sources.allow-org]
 # github.com organizations to allow git sources for

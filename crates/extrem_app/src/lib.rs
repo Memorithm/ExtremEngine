@@ -173,6 +173,11 @@ impl App {
         self
     }
 
+    /// Current upper bound on fixed simulation steps executed per frame.
+    pub fn max_fixed_steps_per_frame(&self) -> u32 {
+        self.max_fixed_steps_per_frame
+    }
+
     pub fn world(&self) -> &World {
         &self.world
     }
