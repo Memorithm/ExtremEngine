@@ -27,3 +27,7 @@ elastic = { git = "https://github.com/Memorithm/ElasticXxx.git", rev = "8441991f
 
 [lints]
 workspace = true
+
+[[example]]
+name = "adaptive_quality_bench"
+required-features = ["elastic-quality"]

@@ -17,3 +17,11 @@ The default ExtremEngine feature set and Rust 1.87 MSRV remain unchanged. `elast
 ## Qualification boundary
 
 The tests establish only deterministic controller semantics, fail-closed missing evidence, hysteresis/cooldown behavior, facade-level Boolean admission, and rollback on an injected verification failure, terminal latching after an unverified rollback, and explicit verified recovery. A real frame-time or user-experience benefit requires a separate reproducible benchmark on a declared workload and hardware. Dynamic resolution, LOD, GPU timing and visual-quality objectives remain separate future integrations.
+
+## Controlled real-consumer effect benchmark
+
+`adaptive_quality_bench` exercises the real `Engine`/`App` fixed-step scheduler with the existing `NullRenderer` backend. It runs two declared scenarios: sustained pressure, where the controller lowers the cap from 4 to 2, and recovery, where it raises the cap from 2 to 4. The paired non-adaptive reference keeps the same initial cap for the full workload.
+
+The harness records actual fixed-step executions, frames where whole fixed-step debt is dropped, committed controller transitions, final budget, a deterministic fixed-update workload fingerprint, and host elapsed nanoseconds. Every measured sample must reproduce the same scheduler-effect record as its untimed preflight. Baseline/adaptive execution order alternates between samples.
+
+The timing column is observational only because the compared modes deliberately execute different numbers of fixed updates. It must not be interpreted as controller overhead, a speedup, FPS gain, energy saving, visual-quality improvement, GPU result, or end-to-end performance result. Such claims remain blocked on a separately declared representative workload, hardware, quality objective, and reproducible measurement protocol.
