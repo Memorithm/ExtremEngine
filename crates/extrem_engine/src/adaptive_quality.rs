@@ -447,6 +447,82 @@ mod tests {
     }
 
     #[test]
+    fn trusted_validation_rejection_never_reaches_mutation() {
+        struct RejectingActuator {
+            current: u32,
+        }
+
+        impl FixedStepBudgetActuator for RejectingActuator {
+            fn current_fixed_step_budget(&self) -> u32 {
+                self.current
+            }
+
+            fn validate_fixed_step_budget(&self, _target: u32) -> bool {
+                false
+            }
+
+            fn apply_fixed_step_budget(&mut self, _target: u32) {
+                panic!("trusted validation rejection must prevent actuation");
+            }
+
+            fn verify_fixed_step_budget(&self, target: u32) -> bool {
+                self.current == target
+            }
+
+            fn rollback_fixed_step_budget(&mut self, _previous: u32) {
+                panic!("no rollback is needed when validation rejects before actuation");
+            }
+        }
+
+        let mut controller = AdaptiveFixedStepController::new(config()).unwrap();
+        let mut actuator = RejectingActuator { current: 4 };
+        assert_eq!(
+            controller.apply(&mut actuator, FrameTimeObservation::measured(3, 0.040)),
+            AdaptiveQualityOutcome::RejectedByTrustedValidation { target: 3 }
+        );
+        assert_eq!(actuator.current, 4);
+        assert_eq!(controller.last_transition_frame(), None);
+    }
+
+    #[test]
+    fn rollback_verification_failure_is_explicitly_fail_closed() {
+        let mut controller = AdaptiveFixedStepController::new(config()).unwrap();
+        let mut actuator = FaultyActuator {
+            current: 4,
+            previous: 4,
+            fail_target_verification: true,
+            fail_rollback_verification: true,
+        };
+        assert_eq!(
+            controller.apply(&mut actuator, FrameTimeObservation::measured(3, 0.040)),
+            AdaptiveQualityOutcome::RollbackFailedClosed {
+                attempted: 3,
+                expected_restore: 4,
+            }
+        );
+        assert_eq!(controller.last_transition_frame(), None);
+    }
+
+    #[test]
+    fn out_of_order_frame_is_unknown_and_cannot_mutate() {
+        let mut controller = AdaptiveFixedStepController::new(config()).unwrap();
+        let mut engine = Engine::new();
+        engine.set_max_fixed_steps_per_frame(4);
+        assert!(matches!(
+            controller.apply(&mut engine, FrameTimeObservation::measured(10, 0.040)),
+            AdaptiveQualityOutcome::Committed { target: 3, .. }
+        ));
+        assert_eq!(
+            controller.apply(&mut engine, FrameTimeObservation::measured(9, 0.040)),
+            AdaptiveQualityOutcome::Held {
+                guard: TruthValue::Unknown,
+                decision: AdaptiveQualityDecision::DecreaseFixedStepBudget { target: 2 },
+            }
+        );
+        assert_eq!(engine.max_fixed_steps_per_frame(), 3);
+    }
+
+    #[test]
     fn invalid_configuration_is_rejected() {
         let mut invalid = config();
         invalid.recover_below_seconds = invalid.degrade_above_seconds;
