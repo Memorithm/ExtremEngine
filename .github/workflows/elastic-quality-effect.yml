@@ -1,0 +1,83 @@
+name: Elastic Adaptive Quality Effect
+
+on:
+  pull_request:
+    paths:
+      - "crates/extrem_app/**"
+      - "crates/extrem_engine/**"
+      - "docs/ELASTIC_ADAPTIVE_QUALITY.md"
+      - "Cargo.lock"
+      - ".github/workflows/elastic-quality.yml"
+      - ".github/workflows/elastic-quality-effect.yml"
+  push:
+    branches: ["agent/**"]
+    paths:
+      - "crates/extrem_app/**"
+      - "crates/extrem_engine/**"
+      - "docs/ELASTIC_ADAPTIVE_QUALITY.md"
+      - "Cargo.lock"
+      - ".github/workflows/elastic-quality.yml"
+      - ".github/workflows/elastic-quality-effect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elastic-quality-effect-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  effect:
+    name: Controlled scheduler effect evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: "1.89"
+          components: rustfmt, clippy
+      - name: Exact-head identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected"
+      - name: Contract checks
+        run: |
+          cargo fmt --all -- --check
+          cargo check -p extrem_engine --features elastic-quality --example adaptive_quality_bench --locked
+          cargo clippy -p extrem_engine --features elastic-quality --example adaptive_quality_bench --locked -- -D warnings
+      - name: Record execution environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            cargo --version
+            uname -a
+            lscpu
+            printf 'RUNNER_OS=%s\nRUNNER_ARCH=%s\nRUSTFLAGS=%s\n' \
+              "$RUNNER_OS" "$RUNNER_ARCH" "${RUSTFLAGS-}"
+          } > evidence/environment.txt
+      - name: Controlled real-consumer effect benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EXTREM_BENCH_REVISION="$(git rev-parse HEAD)"
+          cargo run --release -p extrem_engine --example adaptive_quality_bench \
+            --features elastic-quality --locked | tee evidence/adaptive-quality-effect.csv
+          grep '^summary,' evidence/adaptive-quality-effect.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: elastic-quality-effect-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90
