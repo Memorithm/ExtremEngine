@@ -137,6 +137,8 @@ pub enum AdaptiveQualityOutcome {
         attempted: u32,
         expected_restore: u32,
     },
+    /// A prior rollback could not be verified; later admission stays disabled.
+    FaultLatched,
 }
 
 /// Trusted stateful boundary. Boolean eligibility alone never calls `apply` unless
@@ -179,6 +181,7 @@ pub struct AdaptiveFixedStepController {
     metric_key: PredicateKey,
     cooldown_key: PredicateKey,
     last_transition_frame: Option<u64>,
+    fault_latched: bool,
 }
 
 impl AdaptiveFixedStepController {
@@ -208,6 +211,7 @@ impl AdaptiveFixedStepController {
             metric_key,
             cooldown_key,
             last_transition_frame: None,
+            fault_latched: false,
         })
     }
 
@@ -219,11 +223,39 @@ impl AdaptiveFixedStepController {
         self.last_transition_frame
     }
 
+    /// Whether an unverified rollback has disabled further admission.
+    pub const fn fault_latched(&self) -> bool {
+        self.fault_latched
+    }
+
+    /// Clear a latched rollback fault only after the trusted actuator verifies an
+    /// explicitly expected in-range state. This method never mutates the actuator.
+    pub fn recover_after_fault<A: FixedStepBudgetActuator>(
+        &mut self,
+        actuator: &A,
+        expected: u32,
+    ) -> bool {
+        if !self.fault_latched
+            || expected < self.config.min_fixed_steps_per_frame
+            || expected > self.config.max_fixed_steps_per_frame
+            || actuator.current_fixed_step_budget() != expected
+            || !actuator.verify_fixed_step_budget(expected)
+        {
+            return false;
+        }
+        self.fault_latched = false;
+        true
+    }
+
     pub fn apply<A: FixedStepBudgetActuator>(
         &mut self,
         actuator: &mut A,
         observation: FrameTimeObservation,
     ) -> AdaptiveQualityOutcome {
+        if self.fault_latched {
+            return AdaptiveQualityOutcome::FaultLatched;
+        }
+
         let current = actuator.current_fixed_step_budget();
         let measurement = observation
             .measured_seconds
@@ -300,6 +332,7 @@ impl AdaptiveFixedStepController {
                 restored: previous,
             }
         } else {
+            self.fault_latched = true;
             AdaptiveQualityOutcome::RollbackFailedClosed {
                 attempted: target,
                 expected_restore: previous,
@@ -501,6 +534,43 @@ mod tests {
             }
         );
         assert_eq!(controller.last_transition_frame(), None);
+        assert!(controller.fault_latched());
+
+        actuator.fail_target_verification = false;
+        actuator.fail_rollback_verification = false;
+        assert_eq!(
+            controller.apply(&mut actuator, FrameTimeObservation::measured(4, 0.040)),
+            AdaptiveQualityOutcome::FaultLatched
+        );
+        assert_eq!(actuator.current, 4);
+
+        assert!(controller.recover_after_fault(&actuator, 4));
+        assert!(!controller.fault_latched());
+        assert!(matches!(
+            controller.apply(&mut actuator, FrameTimeObservation::measured(5, 0.040)),
+            AdaptiveQualityOutcome::Committed {
+                previous: 4,
+                target: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fault_recovery_requires_verified_expected_state() {
+        let mut controller = AdaptiveFixedStepController::new(config()).unwrap();
+        let mut actuator = FaultyActuator {
+            current: 4,
+            previous: 4,
+            fail_target_verification: true,
+            fail_rollback_verification: true,
+        };
+        assert!(matches!(
+            controller.apply(&mut actuator, FrameTimeObservation::measured(3, 0.040)),
+            AdaptiveQualityOutcome::RollbackFailedClosed { .. }
+        ));
+        assert!(!controller.recover_after_fault(&actuator, 4));
+        assert!(controller.fault_latched());
     }
 
     #[test]
