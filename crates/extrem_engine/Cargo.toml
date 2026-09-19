@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "High-level engine facade for ExtremEngine"
 
+[features]
+default = []
+elastic-quality = ["dep:elastic"]
+
 [dependencies]
 extrem_app = { path = "../extrem_app" }
 extrem_assets = { path = "../extrem_assets" }
@@ -19,6 +23,7 @@ extrem_render = { path = "../extrem_render" }
 extrem_scene = { path = "../extrem_scene" }
 extrem_gpu = { path = "../extrem_gpu" }
 extrem_window = { path = "../extrem_window" }
+elastic = { git = "https://github.com/Memorithm/ElasticXxx.git", rev = "8441991feea3a2aae19f62a8e51c89e7f0d6f969", package = "elastic", optional = true }
 
 [lints]
 workspace = true

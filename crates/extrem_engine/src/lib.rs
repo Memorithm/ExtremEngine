@@ -1,3 +1,11 @@
+#[cfg(feature = "elastic-quality")]
+mod adaptive_quality;
+#[cfg(feature = "elastic-quality")]
+pub use adaptive_quality::{
+    AdaptiveFixedStepController, AdaptiveQualityConfig, AdaptiveQualityConfigError,
+    AdaptiveQualityDecision, AdaptiveQualityOutcome, FixedStepBudgetActuator, FrameTimeObservation,
+};
+
 mod extraction;
 pub use extraction::{RenderExtractionStats, RenderExtractor};
 mod mesh;
@@ -206,6 +214,19 @@ impl<R: RenderBackend> Engine<R> {
 
     pub fn config(&self) -> EngineConfig {
         self.config
+    }
+
+    /// Current cap on fixed simulation steps executed during one rendered frame.
+    pub fn max_fixed_steps_per_frame(&self) -> u32 {
+        self.app.max_fixed_steps_per_frame()
+    }
+
+    /// Updates the fixed-step cap while keeping the public engine configuration synchronized.
+    /// Values below one are clamped to one, matching the application scheduler contract.
+    pub fn set_max_fixed_steps_per_frame(&mut self, max_steps: u32) {
+        let max_steps = max_steps.max(1);
+        self.app.set_max_fixed_steps_per_frame(max_steps);
+        self.config.max_fixed_steps_per_frame = max_steps;
     }
 
     /// Updates camera aspect only for finite positive values, preserving it on error.
