@@ -5,7 +5,9 @@ on:
     paths:
       - "crates/extrem_app/**"
       - "crates/extrem_engine/**"
+      - "crates/**"
       - "docs/ELASTIC_ADAPTIVE_QUALITY.md"
+      - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/elastic-quality.yml"
       - ".github/workflows/elastic-quality-effect.yml"
@@ -14,7 +16,9 @@ on:
     paths:
       - "crates/extrem_app/**"
       - "crates/extrem_engine/**"
+      - "crates/**"
       - "docs/ELASTIC_ADAPTIVE_QUALITY.md"
+      - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/elastic-quality.yml"
       - ".github/workflows/elastic-quality-effect.yml"

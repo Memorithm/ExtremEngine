@@ -37,12 +37,19 @@ const SCENARIOS: [Scenario; 2] = [
     },
 ];
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct WorkloadState {
+    invocations: u64,
+    fingerprint: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Effect {
     fixed_steps: u64,
     debt_frames: u64,
     transitions: u64,
     final_budget: u32,
+    workload_invocations: u64,
     workload_fingerprint: u64,
 }
 
@@ -63,14 +70,19 @@ fn engine(initial_budget: u32) -> Engine {
         .set_fixed_timestep(FIXED_DELTA_SECONDS)
         .set_max_fixed_steps_per_frame(initial_budget);
     engine.set_max_fixed_steps_per_frame(initial_budget);
-    engine.world_mut().insert_resource(0_u64);
+    engine.world_mut().insert_resource(WorkloadState::default());
     engine
         .app_mut()
         .add_systems(Stage::FixedUpdate, |world, time| {
             let state = world
-                .get_resource_mut::<u64>()
+                .get_resource_mut::<WorkloadState>()
                 .expect("benchmark workload state is installed");
-            *state = state
+            state.invocations = state
+                .invocations
+                .checked_add(1)
+                .expect("bounded benchmark invocation count");
+            state.fingerprint = state
+                .fingerprint
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(time.fixed_step ^ 1_442_695_040_888_963_407);
         });
@@ -84,15 +96,19 @@ fn run_baseline(scenario: Scenario) -> Result<Effect, Box<dyn std::error::Error>
         let report = black_box(&mut engine).tick(black_box(FRAME_DELTA_SECONDS))?;
         debt_frames += u64::from(report.fixed_debt_dropped);
     }
+    let workload = *engine
+        .world()
+        .get_resource::<WorkloadState>()
+        .expect("benchmark workload state remains installed");
+    let fixed_steps = engine.app().time().fixed_step;
+    assert_eq!(workload.invocations, fixed_steps);
     Ok(Effect {
-        fixed_steps: engine.app().time().fixed_step,
+        fixed_steps,
         debt_frames,
         transitions: 0,
         final_budget: engine.max_fixed_steps_per_frame(),
-        workload_fingerprint: *engine
-            .world()
-            .get_resource::<u64>()
-            .expect("benchmark workload state remains installed"),
+        workload_invocations: workload.invocations,
+        workload_fingerprint: workload.fingerprint,
     })
 }
 
@@ -112,15 +128,19 @@ fn run_adaptive(scenario: Scenario) -> Result<Effect, Box<dyn std::error::Error>
         let report = black_box(&mut engine).tick(black_box(FRAME_DELTA_SECONDS))?;
         debt_frames += u64::from(report.fixed_debt_dropped);
     }
+    let workload = *engine
+        .world()
+        .get_resource::<WorkloadState>()
+        .expect("benchmark workload state remains installed");
+    let fixed_steps = engine.app().time().fixed_step;
+    assert_eq!(workload.invocations, fixed_steps);
     Ok(Effect {
-        fixed_steps: engine.app().time().fixed_step,
+        fixed_steps,
         debt_frames,
         transitions,
         final_budget: engine.max_fixed_steps_per_frame(),
-        workload_fingerprint: *engine
-            .world()
-            .get_resource::<u64>()
-            .expect("benchmark workload state remains installed"),
+        workload_invocations: workload.invocations,
+        workload_fingerprint: workload.fingerprint,
     })
 }
 
@@ -158,10 +178,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "# elapsed time is observational; modes execute different fixed-step counts by design"
     );
     println!(
-        "# raw,scenario,mode,sample,total_ns,fixed_steps,debt_frames,transitions,final_budget,workload_fingerprint"
+        "# raw,scenario,mode,sample,total_ns,fixed_steps,debt_frames,transitions,final_budget,workload_invocations,workload_fingerprint"
     );
     println!(
-        "# summary,scenario,mode,median_total_ns,p95_total_ns,fixed_steps,debt_frames,transitions,final_budget"
+        "# summary,scenario,mode,median_total_ns,p95_total_ns,fixed_steps,debt_frames,transitions,final_budget,workload_invocations"
     );
 
     for scenario in SCENARIOS {
@@ -198,12 +218,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if sample >= WARMUP {
                     let sample_id = sample - WARMUP;
                     println!(
-                        "raw,{},{mode},{sample_id},{elapsed},{},{},{},{},{}",
+                        "raw,{},{mode},{sample_id},{elapsed},{},{},{},{},{},{}",
                         scenario.name,
                         effect.fixed_steps,
                         effect.debt_frames,
                         effect.transitions,
                         effect.final_budget,
+                        effect.workload_invocations,
                         effect.workload_fingerprint
                     );
                     if mode == "baseline" {
@@ -223,12 +244,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let median = samples[SAMPLES / 2];
             let p95 = samples[(SAMPLES * 95).div_ceil(100) - 1];
             println!(
-                "summary,{},{mode},{median},{p95},{},{},{},{}",
+                "summary,{},{mode},{median},{p95},{},{},{},{},{}",
                 scenario.name,
                 effect.fixed_steps,
                 effect.debt_frames,
                 effect.transitions,
-                effect.final_budget
+                effect.final_budget,
+                effect.workload_invocations
             );
         }
     }
