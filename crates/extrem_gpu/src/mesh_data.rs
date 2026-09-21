@@ -9,6 +9,7 @@ pub const MAX_RESIDENT_MESHES: usize = 256;
 pub const MAX_GEOMETRY_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_TARGET_PIXELS: u64 = 8_388_608;
 pub const MAX_LIGHT_INTENSITY: f32 = 16.0;
+pub const MAX_SHININESS: f32 = 256.0;
 
 /// A position and linear RGB vertex color. Geometry is triangle-list only.
 /// Normals are stored separately in `MeshData` so the original vertex API remains compatible.
@@ -26,6 +27,8 @@ pub struct MeshLight {
     pub color: [f32; 3],
     pub intensity: f32,
     pub ambient: f32,
+    /// Specular intensity. Zero preserves the previous Lambert-only response.
+    pub specular_intensity: f32,
 }
 
 impl Default for MeshLight {
@@ -36,6 +39,7 @@ impl Default for MeshLight {
             color: [1.0; 3],
             intensity: 0.0,
             ambient: 1.0,
+            specular_intensity: 0.0,
         }
     }
 }
@@ -50,8 +54,11 @@ impl MeshLight {
             .all(|value| value.is_finite())
             || !self.intensity.is_finite()
             || !self.ambient.is_finite()
+            || !self.specular_intensity.is_finite()
             || self.intensity < 0.0
             || self.intensity > MAX_LIGHT_INTENSITY
+            || self.specular_intensity < 0.0
+            || self.specular_intensity > MAX_LIGHT_INTENSITY
             || !(0.0..=1.0).contains(&self.ambient)
             || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
             || !direction_length_squared.is_finite()
@@ -286,6 +293,8 @@ pub struct MeshDraw {
     pub model: [f32; 16],
     /// Linear RGBA multiplier. Alpha must be one; transparency is not implemented.
     pub color: [f32; 4],
+    /// Blinn-Phong shininess exponent. Zero disables specular for this draw.
+    pub shininess: f32,
 }
 
 impl MeshDraw {
@@ -298,6 +307,9 @@ impl MeshDraw {
             .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
             || self.color[3] != 1.0
         {
+            return Err(MeshError::InvalidColor);
+        }
+        if !self.shininess.is_finite() || self.shininess < 0.0 || self.shininess > MAX_SHININESS {
             return Err(MeshError::InvalidColor);
         }
         Ok(())
@@ -407,6 +419,57 @@ pub fn shade_lambert(
     }))
 }
 
+/// CPU Blinn-Phong reference. `shininess`/`specular_intensity` of zero match `shade_lambert`.
+pub fn shade_blinn_phong(
+    base_color: [f32; 3],
+    world_normal: [f32; 3],
+    world_position: [f32; 3],
+    camera_position: [f32; 3],
+    light: MeshLight,
+    shininess: f32,
+) -> Result<[f32; 3], MeshError> {
+    if !base_color
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    {
+        return Err(MeshError::InvalidColor);
+    }
+    if !world_position
+        .iter()
+        .chain(camera_position.iter())
+        .all(|value| value.is_finite())
+    {
+        return Err(MeshError::InvalidMatrix);
+    }
+    if !shininess.is_finite() || shininess < 0.0 || shininess > MAX_SHININESS {
+        return Err(MeshError::InvalidColor);
+    }
+    let light = light.validate()?;
+    let normal = normalize_normal(world_normal)?;
+    let direction = normalize_normal(light.direction_to_light)?;
+    let diffuse = dot(normal, direction).max(0.0) * light.intensity;
+    let mut specular = 0.0;
+    if light.specular_intensity > 0.0 && shininess > 0.0 && diffuse > 0.0 {
+        let view = [
+            camera_position[0] - world_position[0],
+            camera_position[1] - world_position[1],
+            camera_position[2] - world_position[2],
+        ];
+        let view = normalize_normal(view)?;
+        let half = normalize_normal([
+            direction[0] + view[0],
+            direction[1] + view[1],
+            direction[2] + view[2],
+        ])?;
+        specular = dot(normal, half).max(0.0).powf(shininess) * light.specular_intensity;
+    }
+    Ok(std::array::from_fn(|axis| {
+        (base_color[axis]
+            * (light.ambient + light.color[axis] * diffuse + light.color[axis] * specular))
+            .clamp(0.0, 1.0)
+    }))
+}
+
 pub fn validate_extent(width: u32, height: u32, device_limit: u32) -> Result<(), MeshError> {
     if width == 0
         || height == 0
@@ -472,6 +535,7 @@ mod bound_tests {
             .unwrap(),
             model: identity(),
             color: [1.0; 4],
+            shininess: 0.0,
         }
     }
 
@@ -501,6 +565,7 @@ mod bound_tests {
             color: [1.0; 3],
             intensity: 1.0,
             ambient: 0.0,
+            specular_intensity: 0.0,
         };
         assert_eq!(light.validate(), Err(MeshError::InvalidLight));
         assert_eq!(

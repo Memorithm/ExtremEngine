@@ -16,14 +16,19 @@ pub fn legacy_submit<R: RenderBackend>(world: &World, aspect: f32, renderer: &mu
                 .get::<GlobalTransform>(entity)
                 .map(|global| global.0)
                 .or_else(|| world.get::<Transform>(entity).copied())?;
-            Some((entity, camera.view_projection(transform, aspect)))
+            Some((
+                entity,
+                camera.view_projection(transform, aspect),
+                transform.translation,
+            ))
         })
-        .min_by_key(|(entity, _)| *entity);
+        .min_by_key(|(entity, _, _)| *entity);
 
-    if let Some((entity, view_projection)) = active_camera {
+    if let Some((entity, view_projection, world_position)) = active_camera {
         renderer.submit(RenderCommand::SetCamera {
             entity,
             view_projection,
+            world_position,
         });
     }
 

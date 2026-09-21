@@ -1,6 +1,6 @@
 # Native indexed world-mesh rendering
 
-ExtremEngine renders ECS geometry through the existing WGPU context/surface authority. The current path is an opaque indexed renderer with depth, vertex normals and one directional Lambert light. It is not a PBR renderer and does not claim production-game throughput.
+ExtremEngine renders ECS geometry through the existing WGPU context/surface authority. The current path is an opaque indexed renderer with depth, vertex normals and one directional Blinn-Phong light (Lambert when specular intensity or shininess is zero). It is not a PBR renderer and does not claim production-game throughput.
 
 ## Geometry and normals
 
@@ -63,6 +63,19 @@ Software Vulkan/llvmpipe evidence establishes rasterization correctness for that
 
 CPU unit tests cover near/side/behind/far rejection, order-preserving retain, non-finite VP failure and translated AABB extrema. Pixel qualification remains required for raster correctness and is unchanged by this CPU filter.
 
+
+## Blinn-Phong specular
+
+Directional lighting may include an optional Blinn-Phong specular term. `MeshLight::specular_intensity` and per-draw `MeshDraw::shininess` default to zero, which preserves the previous Lambert response. Non-zero values use the camera world position (from `SetCamera::world_position`) to form the view and half vectors:
+
+```text
+H = normalize(L + V)
+specular = pow(max(dot(N, H), 0), shininess) * specular_intensity
+rgb_out = clamp(base_rgb * (ambient + light_rgb * (diffuse + specular)), 0, 1)
+```
+
+`extrem_gpu::shade_blinn_phong` is the CPU reference. Specular intensity and shininess are fail-closed bounded; this is not a metallic-roughness PBR model and does not include IBL, environment BRDFs or multiple lights.
+
 ## Remaining product work
 
-Textures/samplers, UV0, consecutive instancing and conservative frustum AABB culling are implemented. Next priorities are a validated asset/import path (glTF/GLB), broader batching/sorting with an explicit order contract, and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.
+Textures/samplers, UV0, consecutive instancing, conservative frustum AABB culling and optional Blinn-Phong specular are implemented. Next priorities are a validated asset/import path (glTF/GLB), broader batching/sorting with an explicit order contract, and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.

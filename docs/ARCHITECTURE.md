@@ -47,7 +47,7 @@ Window-owned surface target
 → present
 ```
 
-ECS mesh rendering with depth, directional Lambert lighting, texture/material contracts, UV0, consecutive instancing and CPU frustum AABB culling is implemented. PBR, shadows, skinning shaders, transparency, post-processing and glTF import remain subsequent rendering work. The historical validation-triangle presenter remains available as a separate low-level tool.
+ECS mesh rendering with depth, directional Blinn-Phong lighting (Lambert-compatible defaults), texture/material contracts, UV0, consecutive instancing and CPU frustum AABB culling is implemented. PBR/IBL, shadows, skinning shaders, transparency, post-processing and glTF import remain subsequent rendering work. The historical validation-triangle presenter remains available as a separate low-level tool.
 
 ## Determinism scope
 

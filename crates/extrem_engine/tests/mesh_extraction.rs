@@ -15,6 +15,7 @@ fn instance() -> MeshInstance {
         )
         .unwrap(),
         color: [1.0; 4],
+        shininess: 0.0,
     }
 }
 
