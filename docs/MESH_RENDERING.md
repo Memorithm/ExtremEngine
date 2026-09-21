@@ -65,4 +65,11 @@ CPU unit tests cover near/side/behind/far rejection, order-preserving retain, no
 
 ## Remaining product work
 
-Textures/samplers, UV0, consecutive instancing and conservative frustum AABB culling are implemented. Next priorities are a validated asset/import path (glTF/GLB), broader batching/sorting with an explicit order contract, and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.
+Textures/samplers, UV0, consecutive instancing, conservative frustum AABB culling and fail-closed static GLB import (`extrem_gpu::import_static_glb`) are implemented. Next priorities are broader batching/sorting with an explicit order contract, embedded/base-color texture import from GLB, and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.
+
+
+## Static GLB import
+
+`extrem_gpu::import_static_glb` decodes a glTF 2.0 binary (`.glb`) into one `ImportedStaticMesh` per supported `TRIANGLES` primitive. Geometry is validated through the existing `MeshData` / `TexturedGeometry` constructors. The importer accepts `POSITION`, optional `NORMAL`, optional `TEXCOORD_0`, optional `COLOR_0`, and opaque `baseColorFactor` when vertex colors are absent.
+
+It rejects skins, morph targets, sparse accessors, required extensions, external buffer URIs, non-triangle modes, material textures, and transparent base-color alpha. Node transforms, animations, cameras and `.gltf` JSON+URI packages are out of scope. Mesh-local space is preserved; callers apply engine transforms separately. See unit tests in `gltf_static.rs` for executed evidence.

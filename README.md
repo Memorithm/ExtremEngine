@@ -29,7 +29,7 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 
 Les workflows `Scene Performance`, `Render Extraction Performance` et `Render Graph Performance` conservent les échantillons bruts, les SHA exécutés et l'environnement dans leurs artefacts. `docs/PERFORMANCE.md` décrit EE-PERF-01/02 ; `docs/RENDER_EXTRACTION.md` décrit EE-PERF-03. La libération explicite du buffer d'extraction est disponible via `Engine::release_render_scratch()`.
 
-Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions et leurs limites doivent être évalués à partir des sorties effectivement produites. Le pipeline de maillages est désormais un chemin GPU réel avec normales et un éclairage directionnel simple ; PBR, import glTF, ombres, transparence, skinning et qualification matérielle restent des travaux distincts. Textures/UV, instancing consécutif et culling frustum AABB conservateur sont déjà présents.
+Ces mesures CPU sur runners partagés ne constituent ni une qualification GPU ni une promesse de FPS. Les gains, les régressions et leurs limites doivent être évalués à partir des sorties effectivement produites. Le pipeline de maillages est désormais un chemin GPU réel avec normales et un éclairage directionnel simple ; PBR, ombres, transparence, skinning, scènes glTF complètes et qualification matérielle restent des travaux distincts. Textures/UV, instancing consécutif, culling frustum AABB conservateur et import GLB statique (sous-ensemble TRIANGLES) sont déjà présents.
 
 ## Rendu natif de maillages
 
@@ -42,7 +42,7 @@ cargo run -p extrem_engine --example mesh_scene --locked
 cargo run -p extrem_engine --example mesh_scene --locked -- --headless mesh-cubes.ppm
 ```
 
-La qualification `Mesh Qualification` exécute des contrôles de pixels avec WGPU, compare l'éclairage à une référence CPU et échoue si aucun adaptateur n'est disponible. Un résultat sur Vulkan logiciel n'est pas une mesure de performance GPU matérielle. Consulter `docs/MESH_RENDERING.md` pour les plafonds, erreurs et limites. PBR, import glTF, transparence, ombres et skinning ne sont pas encore implémentés. Textures/UV, instancing consécutif et culling frustum AABB le sont.
+La qualification `Mesh Qualification` exécute des contrôles de pixels avec WGPU, compare l'éclairage à une référence CPU et échoue si aucun adaptateur n'est disponible. Un résultat sur Vulkan logiciel n'est pas une mesure de performance GPU matérielle. Consulter `docs/MESH_RENDERING.md` pour les plafonds, erreurs et limites. PBR, transparence, ombres, skinning et import glTF+URI complets ne sont pas encore implémentés. Textures/UV, instancing consécutif, culling frustum AABB et import GLB statique (sous-ensemble) le sont.
 
 ## Erreurs de frame et migration d'API
 
