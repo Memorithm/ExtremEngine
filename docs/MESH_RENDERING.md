@@ -43,18 +43,26 @@ The cube example uses white base vertex colors, generated face normals and a war
 
 Accepted limits remain 1,000,000 vertices, 3,000,000 indices per mesh, 4,096 visible draws, 256 resident unique geometries, 64 MiB of current vertex/normal/index payload and 8,388,608 target pixels, additionally bounded by device texture limits. These are accepted-payload bounds, not total allocator, driver, overdraw or frame-time quotas.
 
-Geometry caching is by live `Arc` identity, not content hash. There is still one indexed draw call per visible entity; grouped instancing and indirect draws are not implemented. Models/materials are uploaded each frame. Host allocation failure and all forms of device loss are not universally recoverable.
+Geometry caching is by live `Arc` identity, not content hash. After validation, draws whose object-space AABB is fully outside the camera frustum are omitted from encoding; intersecting bounds are kept. Surviving consecutive draws that share one uploaded `MeshData` may collapse into one instanced `draw_indexed` (see `docs/INSTANCING.md`). Indirect draws are not implemented. Models/materials are uploaded each frame for surviving draws. Host allocation failure and all forms of device loss are not universally recoverable.
+
+`MeshFrameReport::draw_calls` is the caller batch size before frustum culling. `culled_draw_calls` counts fully exterior AABBs. `encoded_draw_calls` is the number of indexed draw commands after culling and consecutive instancing. None of these values is GPU time or FPS.
 
 Nested WGPU scopes capture Validation, OutOfMemory and Internal errors across resource creation, upload, submission, resize and readback. Offscreen readback removes 256-byte row padding and uses bounded native waits. This native blocking API is not the future browser/WASM asynchronous readback contract.
 
 ## Qualification
 
-CPU tests cover automatic and explicit normals, invalid normals, nonuniform and mirrored normal transforms, singular rejection, directional-light bounds and a numerical Lambert reference. The required Mesh Qualification workflow then executes WGPU on the actual selected adapter. A missing adapter is failure, not a skipped success.
+CPU tests cover automatic and explicit normals, invalid normals, nonuniform and mirrored normal transforms, singular rejection, directional-light bounds, a numerical Lambert reference and conservative frustum AABB culling. The required Mesh Qualification workflow then executes WGPU on the actual selected adapter. A missing adapter is failure, not a skipped success.
 
 The pixel executable checks generated +Z normals, CPU/GPU Lambert agreement within one UNORM channel, normal rotation from lit to ambient-only, depth order independence, current camera movement, visibility, shared geometry upload reuse, odd-width padded readback, zero-size suspend/resume, invalid-input preservation and missing-hook rejection. The three-cube scene exercises the same lighting path with perspective transforms.
 
 Software Vulkan/llvmpipe evidence establishes rasterization correctness for that environment only. It is not physical-GPU throughput, FPS, energy, driver portability or interactive-window qualification.
 
+## Frustum culling
+
+`MeshData` stores an object-space AABB computed at construction. `extrem_gpu::Frustum::from_view_projection` extracts six inward planes from the column-major view-projection matrix with WebGPU depth in `[0, 1]`. World AABBs are formed by transforming the eight local corners; a draw is rejected only when that AABB is completely outside a plane. Non-finite matrices or plane normals fail closed as `MeshError::InvalidMatrix`. This is conservative: partially visible bounds still draw, and there is no occlusion culling, hierarchical Z, or GPU-driven culling.
+
+CPU unit tests cover near/side/behind/far rejection, order-preserving retain, non-finite VP failure and translated AABB extrema. Pixel qualification remains required for raster correctness and is unchanged by this CPU filter.
+
 ## Remaining product work
 
-Next priorities are material textures/samplers and a validated asset/import path (glTF/GLB), followed by conservative culling, grouped batching/instancing and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.
+Textures/samplers, UV0, consecutive instancing and conservative frustum AABB culling are implemented. Next priorities are a validated asset/import path (glTF/GLB), broader batching/sorting with an explicit order contract, and hardware profiling. PBR/IBL, multiple lights, shadows, transparency, skinning, Meshopt/Draco/KTX2, LOD/DRS and render-graph-driven GPU pass execution remain separate increments. Each should preserve the explicit resource/error contracts and add executed evidence before performance claims.

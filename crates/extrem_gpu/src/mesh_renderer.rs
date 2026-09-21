@@ -23,9 +23,11 @@ const IDENTITY: [f32; 16] = [
 pub struct MeshFrameReport {
     pub submitted: bool,
     pub surface_status: Option<SurfaceFrameStatus>,
-    /// Logical visible mesh instances submitted by the caller.
+    /// Logical mesh instances provided by the caller before frustum culling.
     pub draw_calls: usize,
-    /// Actual `draw_indexed` commands encoded after conservative consecutive instancing.
+    /// Caller draws rejected by conservative frustum AABB tests.
+    pub culled_draw_calls: usize,
+    /// Actual `draw_indexed` commands encoded after culling and consecutive instancing.
     pub encoded_draw_calls: usize,
     pub triangles: usize,
     pub uploaded_meshes: usize,
@@ -254,6 +256,9 @@ impl MeshRenderer {
             None => return Err(MeshError::MissingCamera),
         };
         validate_lit_frame(&camera, light, draws)?;
+        let kept_indices = crate::frustum::retain_draws_in_frustum(&camera, draws)?;
+        let culled_draw_calls = draws.len() - kept_indices.len();
+        let kept: Vec<&MeshDraw> = kept_indices.iter().map(|&index| &draws[index]).collect();
         let mut seen = HashSet::new();
         let mut bytes = 0usize;
         for draw in draws {
@@ -307,9 +312,9 @@ impl MeshRenderer {
         self.cached
             .retain(|entry| seen.contains(&Arc::as_ptr(&entry.source)));
         let mut uploaded = 0;
-        let mut slots = Vec::with_capacity(draws.len());
+        let mut slots = Vec::with_capacity(kept.len());
         self.instance_bytes.clear();
-        for draw in draws {
+        for draw in &kept {
             let slot = match self
                 .cached
                 .iter()
@@ -352,7 +357,7 @@ impl MeshRenderer {
         self.context
             .queue()
             .write_buffer(&self.frame_uniforms, 0, &frame_bytes);
-        if !draws.is_empty() {
+        if !kept.is_empty() {
             self.context
                 .queue()
                 .write_buffer(&self.instances, 0, &self.instance_bytes);
@@ -423,8 +428,9 @@ impl MeshRenderer {
             submitted: true,
             surface_status: status,
             draw_calls: draws.len(),
+            culled_draw_calls,
             encoded_draw_calls,
-            triangles: draws.iter().map(|draw| draw.mesh.indices().len() / 3).sum(),
+            triangles: kept.iter().map(|draw| draw.mesh.indices().len() / 3).sum(),
             uploaded_meshes: uploaded,
             resident_geometry_bytes: bytes,
         })

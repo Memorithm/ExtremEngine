@@ -1,6 +1,8 @@
 //! GPU context/surface authority and native indexed world-mesh rendering.
 mod context;
 pub use context::*;
+mod frustum;
+pub use frustum::{Aabb, Frustum, retain_draws_in_frustum, transform_aabb};
 mod mesh_data;
 pub use mesh_data::{
     MAX_FRAME_DRAWS, MAX_GEOMETRY_BYTES, MAX_LIGHT_INTENSITY, MAX_MESH_INDICES, MAX_MESH_VERTICES,

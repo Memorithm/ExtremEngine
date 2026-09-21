@@ -107,6 +107,7 @@ pub struct MeshData {
     normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
     position_bounds: [f64; 4],
+    local_aabb: crate::frustum::Aabb,
 }
 
 impl MeshData {
@@ -154,16 +155,24 @@ impl MeshData {
         indices: Vec<u32>,
     ) -> Result<Arc<Self>, MeshError> {
         let mut position_bounds = [0.0_f64, 0.0, 0.0, 1.0];
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
         for vertex in &vertices {
             for (bound, value) in position_bounds.iter_mut().zip(vertex.position) {
                 *bound = bound.max(f64::from(value).abs());
             }
+            for axis in 0..3 {
+                min[axis] = min[axis].min(vertex.position[axis]);
+                max[axis] = max[axis].max(vertex.position[axis]);
+            }
         }
+        let local_aabb = crate::frustum::Aabb::from_min_max(min, max)?;
         Ok(Arc::new(Self {
             vertices,
             normals,
             indices,
             position_bounds,
+            local_aabb,
         }))
     }
 
@@ -177,6 +186,11 @@ impl MeshData {
 
     pub fn indices(&self) -> &[u32] {
         &self.indices
+    }
+
+    /// Object-space axis-aligned bounds used by conservative frustum culling.
+    pub fn local_aabb(&self) -> crate::frustum::Aabb {
+        self.local_aabb
     }
 
     /// Exact uploaded vertex/normal/index payload bytes; excludes allocator/driver overhead.

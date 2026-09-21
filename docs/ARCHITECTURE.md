@@ -38,15 +38,16 @@ The present GPU milestone is intentionally narrow but real:
 ```text
 Window-owned surface target
 → compatible adapter/device
-→ WGSL shader
-→ render pipeline
-→ render pass
-→ draw validation triangle
+→ WGSL mesh shader
+→ render pipeline with depth
+→ opaque indexed mesh draws
+→ optional consecutive instancing
+→ conservative frustum AABB cull
 → queue submit
 → present
 ```
 
-It does not yet render ECS meshes/materials. Mesh buffers, textures, depth, lighting, PBR, shadows, skinning shaders and post-processing remain subsequent rendering work.
+ECS mesh rendering with depth, directional Lambert lighting, texture/material contracts, UV0, consecutive instancing and CPU frustum AABB culling is implemented. PBR, shadows, skinning shaders, transparency, post-processing and glTF import remain subsequent rendering work. The historical validation-triangle presenter remains available as a separate low-level tool.
 
 ## Determinism scope
 
