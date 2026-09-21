@@ -57,8 +57,7 @@ impl MeshLight {
             || !self.specular_intensity.is_finite()
             || self.intensity < 0.0
             || self.intensity > MAX_LIGHT_INTENSITY
-            || self.specular_intensity < 0.0
-            || self.specular_intensity > MAX_LIGHT_INTENSITY
+            || !(0.0..=MAX_LIGHT_INTENSITY).contains(&self.specular_intensity)
             || !(0.0..=1.0).contains(&self.ambient)
             || self.color.iter().any(|value| !(0.0..=1.0).contains(value))
             || !direction_length_squared.is_finite()
@@ -309,7 +308,7 @@ impl MeshDraw {
         {
             return Err(MeshError::InvalidColor);
         }
-        if !self.shininess.is_finite() || self.shininess < 0.0 || self.shininess > MAX_SHININESS {
+        if !self.shininess.is_finite() || !(0.0..=MAX_SHININESS).contains(&self.shininess) {
             return Err(MeshError::InvalidColor);
         }
         Ok(())
@@ -441,7 +440,7 @@ pub fn shade_blinn_phong(
     {
         return Err(MeshError::InvalidMatrix);
     }
-    if !shininess.is_finite() || shininess < 0.0 || shininess > MAX_SHININESS {
+    if !shininess.is_finite() || !(0.0..=MAX_SHININESS).contains(&shininess) {
         return Err(MeshError::InvalidColor);
     }
     let light = light.validate()?;
