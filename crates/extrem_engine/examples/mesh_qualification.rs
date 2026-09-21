@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         MeshInstance {
             geometry: Arc::clone(&geometry),
             color: [1.0, 0.0, 0.0, 1.0],
+            shininess: 0.0,
         },
     )?;
     let far = engine
@@ -90,6 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         MeshInstance {
             geometry: Arc::clone(&geometry),
             color: [0.0, 0.0, 1.0, 1.0],
+            shininess: 0.0,
         },
     )?;
     engine.tick(0.0)?;
@@ -117,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: [1.0; 3],
         intensity: 0.6,
         ambient: 0.2,
+        specular_intensity: 0.0,
     };
     let light_entity = engine.world_mut().try_spawn(DirectionalLight {
         active: true,
@@ -124,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         color: light_gpu.color,
         intensity: light_gpu.intensity,
         ambient: light_gpu.ambient,
+        specular_intensity: 0.0,
     })?;
     engine.tick(0.0)?;
     let first = engine
@@ -230,11 +234,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mesh: Arc::clone(&geometry),
             model: Mat4::translation(Vec3::new(-0.15, 0.0, 0.2)).data,
             color: [1.0, 0.0, 0.0, 1.0],
+            shininess: 0.0,
         },
         MeshDraw {
             mesh: geometry,
             model: Mat4::translation(Vec3::new(0.15, 0.0, 0.7)).data,
             color: [0.0, 0.0, 1.0, 1.0],
+            shininess: 0.0,
         },
     ];
     let gpu = engine.renderer_mut().gpu_mut();

@@ -14,6 +14,8 @@ pub use extrem_gpu::{MeshData, MeshError, MeshFrameReport, MeshVertex};
 pub struct MeshInstance {
     pub geometry: Arc<MeshData>,
     pub color: [f32; 4],
+    /// Blinn-Phong shininess. Zero keeps Lambert-only shading for this instance.
+    pub shininess: f32,
 }
 
 /// One world-space directional light. The lowest active Entity ID wins deterministically.
@@ -24,6 +26,8 @@ pub struct DirectionalLight {
     pub color: [f32; 3],
     pub intensity: f32,
     pub ambient: f32,
+    /// Specular intensity. Zero preserves Lambert-only lighting.
+    pub specular_intensity: f32,
 }
 
 impl Default for DirectionalLight {
@@ -34,6 +38,7 @@ impl Default for DirectionalLight {
             color: [1.0; 3],
             intensity: 0.85,
             ambient: 0.15,
+            specular_intensity: 0.0,
         }
     }
 }
@@ -49,6 +54,7 @@ impl DirectionalLight {
             color: self.color,
             intensity: self.intensity,
             ambient: self.ambient,
+            specular_intensity: self.specular_intensity,
         }
     }
 }
@@ -104,6 +110,7 @@ impl MeshExtractor {
                 mesh: Arc::clone(&instance.geometry),
                 model: transform.to_mat4().data,
                 color: instance.color,
+                shininess: instance.shininess,
             };
             if let Err(error) = draw.validate() {
                 self.items.clear();
@@ -133,6 +140,7 @@ pub struct WgpuMeshRenderer {
     gpu: MeshRenderer,
     extractor: MeshExtractor,
     camera: Option<[f32; 16]>,
+    camera_position: [f32; 3],
     light: MeshLight,
     extraction_error: Option<MeshError>,
     last_extraction: MeshExtractionStats,
@@ -146,6 +154,7 @@ impl WgpuMeshRenderer {
             gpu,
             extractor: MeshExtractor::default(),
             camera: None,
+            camera_position: [0.0, 0.0, 0.0],
             light: MeshLight::default(),
             extraction_error: None,
             last_extraction: MeshExtractionStats::default(),
@@ -211,6 +220,7 @@ impl WgpuMeshRenderer {
 impl RenderBackend for WgpuMeshRenderer {
     fn begin_frame(&mut self, _info: FrameInfo) {
         self.camera = None;
+        self.camera_position = [0.0, 0.0, 0.0];
         self.light = MeshLight::default();
         self.extraction_error = Some(MeshError::MissingExtraction);
         self.last_extraction = MeshExtractionStats::default();
@@ -220,19 +230,25 @@ impl RenderBackend for WgpuMeshRenderer {
     fn submit(&mut self, command: RenderCommand) {
         self.submitted_commands += 1;
         if let RenderCommand::SetCamera {
-            view_projection, ..
+            view_projection,
+            world_position,
+            ..
         } = command
         {
             self.camera = Some(view_projection.data);
+            self.camera_position = [world_position.x, world_position.y, world_position.z];
         }
     }
 
     fn end_frame(&mut self) -> FrameStats {
         self.last_result = Some(match self.extraction_error.take() {
             Some(error) => Err(error),
-            None => self
-                .gpu
-                .render_lit(self.camera, self.light, self.extractor.draws()),
+            None => self.gpu.render_lit(
+                self.camera,
+                self.camera_position,
+                self.light,
+                self.extractor.draws(),
+            ),
         });
         FrameStats {
             submitted_commands: self.submitted_commands,

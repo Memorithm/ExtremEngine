@@ -1,6 +1,6 @@
 use extrem_gpu::{
-    MAX_FRAME_DRAWS, MeshData, MeshDraw, MeshError, MeshLight, MeshVertex, shade_lambert,
-    transform_normal_reference, validate_extent, validate_frame, validate_lit_frame,
+    MAX_FRAME_DRAWS, MeshData, MeshDraw, MeshError, MeshLight, MeshVertex, shade_blinn_phong,
+    shade_lambert, transform_normal_reference, validate_extent, validate_frame, validate_lit_frame,
 };
 
 fn vertices() -> Vec<MeshVertex> {
@@ -33,6 +33,7 @@ fn draw() -> MeshDraw {
         mesh: MeshData::new(vertices(), vec![0, 1, 2]).unwrap(),
         model: identity(),
         color: [1.0; 4],
+        shininess: 0.0,
     }
 }
 
@@ -155,6 +156,7 @@ fn lambert_reference_has_front_back_and_colored_light_contracts() {
         color: [1.0, 0.5, 0.25],
         intensity: 0.5,
         ambient: 0.25,
+        specular_intensity: 0.0,
     };
     let front = shade_lambert([0.8, 0.4, 0.2], [0.0, 0.0, 1.0], light).unwrap();
     approx(front[0], 0.6);
@@ -223,4 +225,51 @@ fn frame_count_and_extent_limits_are_checked_without_gpu_allocations() {
     }
     assert!(validate_extent(3840, 2160, 4096).is_ok());
     assert!(validate_extent(65, 49, 4096).is_ok());
+}
+
+#[test]
+fn blinn_phong_matches_lambert_when_specular_disabled_and_exceeds_it_when_enabled() {
+    let lambert_light = MeshLight {
+        direction_to_light: [0.0, 0.0, 1.0],
+        color: [1.0; 3],
+        intensity: 0.4,
+        ambient: 0.1,
+        specular_intensity: 0.0,
+    };
+    let specular_light = MeshLight {
+        specular_intensity: 0.5,
+        ..lambert_light
+    };
+    let normal = [0.0, 0.0, 1.0];
+    let position = [0.0, 0.0, 0.0];
+    let camera = [0.0, 0.0, 1.0];
+    let base = [0.5, 0.0, 0.0];
+    let lambert = shade_lambert(base, normal, lambert_light).unwrap();
+    let disabled = shade_blinn_phong(base, normal, position, camera, lambert_light, 32.0).unwrap();
+    assert_eq!(lambert, disabled);
+    let enabled = shade_blinn_phong(base, normal, position, camera, specular_light, 32.0).unwrap();
+    assert!(enabled[0] > lambert[0], "{enabled:?} vs {lambert:?}");
+    assert_eq!(enabled[1], lambert[1]);
+    assert_eq!(enabled[2], lambert[2]);
+}
+
+#[test]
+fn rejects_non_finite_camera_position_and_out_of_range_shininess() {
+    let light = MeshLight::default();
+    assert_eq!(
+        shade_blinn_phong(
+            [1.0; 3],
+            [0.0, 0.0, 1.0],
+            [0.0; 3],
+            [f32::NAN, 0.0, 0.0],
+            light,
+            8.0,
+        ),
+        Err(MeshError::InvalidMatrix)
+    );
+    let mut draw = draw();
+    draw.shininess = -1.0;
+    assert_eq!(draw.validate(), Err(MeshError::InvalidColor));
+    draw.shininess = 512.0;
+    assert_eq!(draw.validate(), Err(MeshError::InvalidColor));
 }

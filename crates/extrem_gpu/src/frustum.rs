@@ -301,16 +301,19 @@ mod tests {
                 mesh: Arc::clone(&mesh),
                 model: translation(0.0, 0.0, -2.0),
                 color: [1.0; 4],
+                shininess: 0.0,
             },
             MeshDraw {
                 mesh: Arc::clone(&mesh),
                 model: translation(40.0, 0.0, -2.0),
                 color: [1.0; 4],
+                shininess: 0.0,
             },
             MeshDraw {
                 mesh: Arc::clone(&mesh),
                 model: translation(0.0, 0.0, -3.0),
                 color: [1.0; 4],
+                shininess: 0.0,
             },
         ];
         assert_eq!(

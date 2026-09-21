@@ -17,6 +17,8 @@ pub enum RenderCommand {
     SetCamera {
         entity: Entity,
         view_projection: Mat4,
+        /// World-space camera origin for specular view vectors.
+        world_position: Vec3,
     },
     Transform {
         entity: Entity,

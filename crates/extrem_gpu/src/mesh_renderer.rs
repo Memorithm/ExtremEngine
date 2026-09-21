@@ -12,8 +12,8 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const INSTANCE_STRIDE: usize = 80;
-const FRAME_UNIFORM_BYTES: usize = 96;
+const INSTANCE_STRIDE: usize = 96;
+const FRAME_UNIFORM_BYTES: usize = 128;
 const IDENTITY: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
@@ -40,7 +40,7 @@ struct UploadedMesh {
     index: wgpu::Buffer,
 }
 
-/// Opaque indexed renderer with vertex normals and one directional Lambert light.
+/// Opaque indexed renderer with vertex normals and one directional Blinn-Phong light.
 /// Uses GpuContext/SurfaceTarget rather than a second device/surface implementation.
 pub struct MeshRenderer {
     context: GpuContext,
@@ -102,7 +102,7 @@ impl MeshRenderer {
         ];
         let instances_layout = wgpu::vertex_attr_array![
             3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-            6 => Float32x4, 7 => Float32x4
+            6 => Float32x4, 7 => Float32x4, 8 => Float32x4
         ];
         let buffers = [
             Some(wgpu::VertexBufferLayout {
@@ -240,13 +240,17 @@ impl MeshRenderer {
         camera: Option<[f32; 16]>,
         draws: &[MeshDraw],
     ) -> Result<MeshFrameReport, MeshError> {
-        self.render_lit(camera, MeshLight::default(), draws)
+        self.render_lit(camera, [0.0, 0.0, 0.0], MeshLight::default(), draws)
     }
 
     /// Validates a whole lit frame before upload/encoding.
+    ///
+    /// `camera_position` is the world-space camera origin used for Blinn-Phong specular.
+    /// Lambert-compatible frames may pass the origin when `specular_intensity` is zero.
     pub fn render_lit(
         &mut self,
         camera: Option<[f32; 16]>,
+        camera_position: [f32; 3],
         light: MeshLight,
         draws: &[MeshDraw],
     ) -> Result<MeshFrameReport, MeshError> {
@@ -255,6 +259,9 @@ impl MeshRenderer {
             None if draws.is_empty() => IDENTITY,
             None => return Err(MeshError::MissingCamera),
         };
+        if !camera_position.iter().all(|value| value.is_finite()) {
+            return Err(MeshError::InvalidMatrix);
+        }
         validate_lit_frame(&camera, light, draws)?;
         let kept_indices = crate::frustum::retain_draws_in_frustum(&camera, draws)?;
         let culled_draw_calls = draws.len() - kept_indices.len();
@@ -333,7 +340,12 @@ impl MeshRenderer {
                 }
             };
             slots.push(slot);
-            for value in draw.model.iter().chain(&draw.color) {
+            for value in
+                draw.model
+                    .iter()
+                    .chain(draw.color.iter())
+                    .chain(&[draw.shininess, 0.0, 0.0, 0.0])
+            {
                 self.instance_bytes.extend_from_slice(&value.to_le_bytes());
             }
         }
@@ -350,8 +362,12 @@ impl MeshRenderer {
             light.color[1],
             light.color[2],
             light.ambient,
+            camera_position[0],
+            camera_position[1],
+            camera_position[2],
+            light.specular_intensity,
         ];
-        for (chunk, value) in frame_bytes[64..].chunks_exact_mut(4).zip(light_values) {
+        for (chunk, value) in frame_bytes[64..112].chunks_exact_mut(4).zip(light_values) {
             chunk.copy_from_slice(&value.to_le_bytes());
         }
         self.context
