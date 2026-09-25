@@ -9,6 +9,7 @@ description = "Isolated wgpu device initialization for ExtremEngine"
 [dependencies]
 pollster = "1"
 wgpu = "30"
+serde_json.workspace = true
 
 [lints]
 workspace = true

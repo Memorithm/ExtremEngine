@@ -21,3 +21,5 @@ pub use texture::{
     MAX_TEXTURE_BYTES, MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS, MeshMaterial, TextureColorSpace,
     TextureData, TextureError,
 };
+mod gltf_static;
+pub use gltf_static::{GltfImportError, ImportedGeometry, ImportedStaticMesh, import_static_glb};
