@@ -80,6 +80,7 @@ fn all_256_component_presence_patterns_match_an_independent_oracle() {
             expected.push(RenderCommand::SetCamera {
                 entity,
                 view_projection: Camera::default().view_projection(transform, 1.0),
+                world_position: transform.translation,
             });
         }
         expected.extend(expected_transforms);

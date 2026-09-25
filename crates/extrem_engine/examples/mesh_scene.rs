@@ -93,6 +93,7 @@ fn scene(gpu: MeshRenderer, aspect: f32) -> Result<MeshEngine, Box<dyn Error>> {
             MeshInstance {
                 geometry: Arc::clone(&mesh),
                 color,
+                shininess: 0.0,
             },
         )?;
     }
@@ -102,6 +103,7 @@ fn scene(gpu: MeshRenderer, aspect: f32) -> Result<MeshEngine, Box<dyn Error>> {
         color: [1.0, 0.96, 0.90],
         intensity: 0.9,
         ambient: 0.14,
+        specular_intensity: 0.0,
     })?;
     let camera = engine.world_mut().try_spawn(Transform {
         translation: Vec3::new(0.0, 1.4, 5.0),

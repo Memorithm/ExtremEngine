@@ -88,6 +88,7 @@ impl RenderExtractor {
             renderer.submit(RenderCommand::SetCamera {
                 entity,
                 view_projection,
+                world_position: transform.translation,
             });
         }
 

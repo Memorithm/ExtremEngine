@@ -85,7 +85,15 @@ pub fn fingerprint(commands: &[RenderCommand]) -> Vec<(u8, Entity, [u32; 16])> {
             RenderCommand::SetCamera {
                 entity,
                 view_projection,
-            } => (0, entity, view_projection.data.map(f32::to_bits)),
+                world_position,
+            } => {
+                let mut bits = view_projection.data.map(f32::to_bits);
+                // Fold translation into the fingerprint so position regressions fail closed.
+                bits[0] ^= world_position.x.to_bits();
+                bits[1] ^= world_position.y.to_bits();
+                bits[2] ^= world_position.z.to_bits();
+                (0, entity, bits)
+            }
             RenderCommand::Transform {
                 entity,
                 translation,
