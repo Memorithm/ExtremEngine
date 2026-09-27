@@ -26,3 +26,12 @@ After every merge, refresh the current default-branch head before starting the n
 ## Pull-request discipline
 
 A pull request may be merged only when it is non-draft, conflict-free/mergeable, and every applicable required gate is green on its exact head SHA. A CI result from an earlier head is not evidence for a later head.
+
+
+## AX-inspired isolated task execution
+
+Before work involving autonomous execution, generated or untrusted code, remote workers, task-scoped tool authority, workspace materialization, resource envelopes, network egress, sandboxing, checkpoint/suspend/resume, or cross-repository execution, also read:
+
+`origin/agent/ecosystem-roadmap:.agent/EXTREMENGINE_ECOSYSTEM_ROADMAP.yaml`
+
+Google AX is an architectural reference only. The Memorithm contract is Rust-native: SciRust Hub owns task lifecycle/identity, RemoteOps owns concrete host enforcement, ElasticXxx owns adaptive resource policy, and this repository retains its domain authority. A supervised process must never be described as a hostile-code sandbox.
