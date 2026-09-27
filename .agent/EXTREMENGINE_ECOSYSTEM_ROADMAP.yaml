@@ -1,0 +1,23 @@
+schema_version: 1
+kind: extremengine_ecosystem_roadmap
+status: active
+last_updated: "2026-09-27"
+repository: Memorithm/ExtremEngine
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+mission:
+  role: engine_build_asset_and_adaptive_quality_task_consumer
+  boundary: engine_runtime_semantics_remain_ExtremEngine_owned
+ax_task_program:
+  external_reference: google_ax_architecture_only
+  objective: >-
+    Bound build, asset-processing, rendering qualification and adaptive-quality
+    experiments with exact workspaces, explicit hardware/resource envelopes and
+    reproducible artifacts.
+  phases:
+    - AXEE1_pin_asset_toolchain_and_engine_revision
+    - AXEE2_task_bound_GPU_CPU_memory_and_frame_budget_experiments
+    - AXEE3_integrate_ElasticXxx_adaptive_quality_with_declared_invariants
+    - AXEE4_record_device_backend_and_render_evidence
+  invariants:
+    - task_control_does_not_own_game_or_render_semantics
+    - adaptive_quality_never_silently_weakens_required_correctness_or_safety
