@@ -30,6 +30,10 @@ const COMPONENT_UNSIGNED_SHORT: u32 = 5123;
 const COMPONENT_UNSIGNED_INT: u32 = 5125;
 const COMPONENT_FLOAT: u32 = 5126;
 const MAX_GLB_BYTES: usize = 64 * 1024 * 1024;
+// Counts requested by accessors and importer-owned derived vectors. This is an
+// admission budget, not an RSS guarantee; MeshData/GPU allocations have their
+// own limits. It is shared by every primitive in one GLB import.
+const MAX_DECODED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PRIMITIVES: usize = 256;
 
 /// Errors produced while validating or decoding a static GLB payload.
@@ -257,6 +261,44 @@ struct Material {
     base_color_factor: [f32; 4],
 }
 
+struct DecodeBudget {
+    remaining: usize,
+}
+
+impl DecodeBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_DECODED_BYTES,
+        }
+    }
+
+    fn reserve_vec<T>(&mut self, count: usize) -> Result<Vec<T>, GltfImportError> {
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(GltfImportError::Capacity)?;
+        self.remaining = self
+            .remaining
+            .checked_sub(bytes)
+            .ok_or(GltfImportError::Capacity)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| GltfImportError::Capacity)?;
+        Ok(values)
+    }
+
+    fn charge<T>(&mut self, count: usize) -> Result<(), GltfImportError> {
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(GltfImportError::Capacity)?;
+        self.remaining = self
+            .remaining
+            .checked_sub(bytes)
+            .ok_or(GltfImportError::Capacity)?;
+        Ok(())
+    }
+}
+
 impl Document {
     fn parse(root: &Value) -> Result<Self, GltfImportError> {
         let meshes = root
@@ -337,23 +379,27 @@ impl Document {
             ));
         }
 
-        let mut out = Vec::new();
+        let primitive_count = self.meshes.iter().try_fold(0usize, |total, mesh| {
+            total
+                .checked_add(mesh.primitives.len())
+                .ok_or(GltfImportError::Capacity)
+        })?;
+        if primitive_count == 0 || primitive_count > MAX_PRIMITIVES {
+            return Err(GltfImportError::Capacity);
+        }
+        let mut budget = DecodeBudget::new();
+        let mut out = budget.reserve_vec(primitive_count)?;
         for (mesh_index, mesh) in self.meshes.iter().enumerate() {
             for (primitive_index, primitive) in mesh.primitives.iter().enumerate() {
-                if out.len() >= MAX_PRIMITIVES {
-                    return Err(GltfImportError::Capacity);
-                }
                 out.push(self.import_primitive(
                     bin,
                     mesh_index,
                     primitive_index,
                     mesh,
                     primitive,
+                    &mut budget,
                 )?);
             }
-        }
-        if out.is_empty() {
-            return Err(GltfImportError::Json("no supported primitives".into()));
         }
         Ok(out)
     }
@@ -365,6 +411,7 @@ impl Document {
         primitive_index: usize,
         mesh: &MeshNode,
         primitive: &Primitive,
+        budget: &mut DecodeBudget,
     ) -> Result<ImportedStaticMesh, GltfImportError> {
         if primitive.mode != MODE_TRIANGLES {
             return Err(GltfImportError::Unsupported("non-TRIANGLES primitive mode"));
@@ -376,35 +423,22 @@ impl Document {
             .attributes
             .position
             .ok_or(GltfImportError::MissingAttribute("POSITION"))?;
-        let positions = self.read_vec3_f32(bin, position_index, "POSITION")?;
+        let positions = self.read_vec3_f32(bin, position_index, "POSITION", None, budget)?;
         let vertex_count = positions.len();
-        if vertex_count == 0 || vertex_count > MAX_MESH_VERTICES {
-            return Err(GltfImportError::Capacity);
-        }
 
         let normals = match primitive.attributes.normal {
-            Some(index) => Some(self.read_vec3_f32(bin, index, "NORMAL")?),
+            Some(index) => {
+                Some(self.read_vec3_f32(bin, index, "NORMAL", Some(vertex_count), budget)?)
+            }
             None => None,
         };
-        if let Some(normals) = &normals {
-            if normals.len() != vertex_count {
-                return Err(GltfImportError::Accessor(
-                    "NORMAL count does not match POSITION".into(),
-                ));
-            }
-        }
 
         let uv0 = match primitive.attributes.texcoord_0 {
-            Some(index) => Some(self.read_vec2_f32(bin, index, "TEXCOORD_0")?),
+            Some(index) => {
+                Some(self.read_vec2_f32(bin, index, "TEXCOORD_0", vertex_count, budget)?)
+            }
             None => None,
         };
-        if let Some(uv0) = &uv0 {
-            if uv0.len() != vertex_count {
-                return Err(GltfImportError::Accessor(
-                    "TEXCOORD_0 count does not match POSITION".into(),
-                ));
-            }
-        }
 
         let base_color = primitive
             .material
@@ -418,33 +452,46 @@ impl Document {
         }
 
         let colors = match primitive.attributes.color_0 {
-            Some(index) => self.read_colors_rgb(bin, index, vertex_count)?,
-            None => vec![[base_color[0], base_color[1], base_color[2]]; vertex_count],
+            Some(index) => self.read_colors_rgb(bin, index, vertex_count, budget)?,
+            None => {
+                let mut colors = budget.reserve_vec(vertex_count)?;
+                colors.resize(vertex_count, [base_color[0], base_color[1], base_color[2]]);
+                colors
+            }
         };
 
         let indices = match primitive.indices {
-            Some(index) => self.read_indices(bin, index)?,
+            Some(index) => self.read_indices(bin, index, budget)?,
             None => {
                 if !vertex_count.is_multiple_of(3) {
                     return Err(GltfImportError::Accessor(
                         "non-indexed vertex count is not a multiple of 3".into(),
                     ));
                 }
-                (0..vertex_count as u32).collect()
+                let mut indices = budget.reserve_vec(vertex_count)?;
+                for index in 0..vertex_count {
+                    indices.push(u32::try_from(index).map_err(|_| GltfImportError::Capacity)?);
+                }
+                indices
             }
         };
-        if indices.len() > MAX_MESH_INDICES || indices.len() % 3 != 0 {
-            return Err(GltfImportError::Capacity);
-        }
 
-        let vertices = positions
-            .into_iter()
-            .zip(colors)
-            .map(|(position, color)| MeshVertex { position, color })
-            .collect::<Vec<_>>();
+        let mut vertices = budget.reserve_vec(vertex_count)?;
+        for (position, color) in positions.into_iter().zip(colors) {
+            vertices.push(MeshVertex { position, color });
+        }
         let mesh_data = match normals {
-            Some(normals) => MeshData::new_with_normals(vertices, normals, indices)?,
-            None => MeshData::new(vertices, indices)?,
+            Some(normals) => {
+                // MeshData normalizes explicit normals into a new Vec.
+                budget.charge::<[f32; 3]>(vertex_count)?;
+                MeshData::new_with_normals(vertices, normals, indices)?
+            }
+            None => {
+                // MeshData derives an f64 accumulator and the final f32 normals.
+                budget.charge::<[f64; 3]>(vertex_count)?;
+                budget.charge::<[f32; 3]>(vertex_count)?;
+                MeshData::new(vertices, indices)?
+            }
         };
         let geometry = match uv0 {
             Some(uv0) => ImportedGeometry::Textured(TexturedGeometry::new(mesh_data, uv0)?),
@@ -469,6 +516,7 @@ impl Document {
         bin: &'a [u8],
         accessor: &Accessor,
         label: &str,
+        element_width: usize,
     ) -> Result<(&'a [u8], usize), GltfImportError> {
         let view_index = accessor
             .buffer_view
@@ -495,12 +543,43 @@ impl Document {
         let stride = view
             .byte_stride
             .unwrap_or_else(|| accessor.element_stride().unwrap_or(0));
-        if stride == 0 {
+        if stride < element_width {
             return Err(GltfImportError::Accessor(format!(
                 "{label} has invalid stride"
             )));
         }
-        Ok((&bin[start..end], stride))
+        let slice = &bin[start..end];
+        let required = if accessor.count == 0 {
+            0
+        } else {
+            accessor
+                .count
+                .checked_sub(1)
+                .and_then(|count| count.checked_mul(stride))
+                .and_then(|offset| offset.checked_add(element_width))
+                .ok_or_else(|| GltfImportError::Accessor(format!("{label} span overflow")))?
+        };
+        if required > slice.len() {
+            return Err(GltfImportError::Truncated);
+        }
+        Ok((slice, stride))
+    }
+
+    fn bounded_count(
+        accessor: &Accessor,
+        label: &str,
+        limit: usize,
+        expected: Option<usize>,
+    ) -> Result<usize, GltfImportError> {
+        if accessor.count == 0 || accessor.count > limit {
+            return Err(GltfImportError::Capacity);
+        }
+        if expected.is_some_and(|count| count != accessor.count) {
+            return Err(GltfImportError::Accessor(format!(
+                "{label} count does not match POSITION"
+            )));
+        }
+        Ok(accessor.count)
     }
 
     fn read_vec3_f32(
@@ -508,6 +587,8 @@ impl Document {
         bin: &[u8],
         index: usize,
         label: &'static str,
+        expected: Option<usize>,
+        budget: &mut DecodeBudget,
     ) -> Result<Vec<[f32; 3]>, GltfImportError> {
         let accessor = self.accessor(index, label)?;
         if accessor.component_type != COMPONENT_FLOAT || accessor.type_name != "VEC3" {
@@ -520,9 +601,10 @@ impl Document {
                 "{label} must not be normalized"
             )));
         }
-        let (slice, stride) = self.view_slice(bin, accessor, label)?;
-        let mut out = Vec::with_capacity(accessor.count);
-        for i in 0..accessor.count {
+        let count = Self::bounded_count(accessor, label, MAX_MESH_VERTICES, expected)?;
+        let (slice, stride) = self.view_slice(bin, accessor, label, 12)?;
+        let mut out = budget.reserve_vec(count)?;
+        for i in 0..count {
             let offset = i
                 .checked_mul(stride)
                 .ok_or(GltfImportError::Accessor(format!(
@@ -550,6 +632,8 @@ impl Document {
         bin: &[u8],
         index: usize,
         label: &'static str,
+        expected: usize,
+        budget: &mut DecodeBudget,
     ) -> Result<Vec<[f32; 2]>, GltfImportError> {
         let accessor = self.accessor(index, label)?;
         if accessor.component_type != COMPONENT_FLOAT || accessor.type_name != "VEC2" {
@@ -557,9 +641,10 @@ impl Document {
                 "{label} must be FLOAT VEC2"
             )));
         }
-        let (slice, stride) = self.view_slice(bin, accessor, label)?;
-        let mut out = Vec::with_capacity(accessor.count);
-        for i in 0..accessor.count {
+        let count = Self::bounded_count(accessor, label, MAX_MESH_VERTICES, Some(expected))?;
+        let (slice, stride) = self.view_slice(bin, accessor, label, 8)?;
+        let mut out = budget.reserve_vec(count)?;
+        for i in 0..count {
             let offset = i
                 .checked_mul(stride)
                 .ok_or(GltfImportError::Accessor(format!(
@@ -583,13 +668,10 @@ impl Document {
         bin: &[u8],
         index: usize,
         expected: usize,
+        budget: &mut DecodeBudget,
     ) -> Result<Vec<[f32; 3]>, GltfImportError> {
         let accessor = self.accessor(index, "COLOR_0")?;
-        if accessor.count != expected {
-            return Err(GltfImportError::Accessor(
-                "COLOR_0 count does not match POSITION".into(),
-            ));
-        }
+        let count = Self::bounded_count(accessor, "COLOR_0", MAX_MESH_VERTICES, Some(expected))?;
         let components = match accessor.type_name.as_str() {
             "VEC3" => 3usize,
             "VEC4" => 4usize,
@@ -599,48 +681,36 @@ impl Document {
                 ));
             }
         };
-        let (slice, stride) = self.view_slice(bin, accessor, "COLOR_0")?;
-        let mut out = Vec::with_capacity(accessor.count);
-        for i in 0..accessor.count {
+        let element_width = match accessor.component_type {
+            COMPONENT_FLOAT => components.checked_mul(4),
+            COMPONENT_UNSIGNED_BYTE if accessor.normalized => Some(components),
+            COMPONENT_UNSIGNED_SHORT if accessor.normalized => components.checked_mul(2),
+            _ => return Err(GltfImportError::Unsupported("COLOR_0 component type")),
+        }
+        .ok_or(GltfImportError::Capacity)?;
+        let (slice, stride) = self.view_slice(bin, accessor, "COLOR_0", element_width)?;
+        let mut out = budget.reserve_vec(count)?;
+        for i in 0..count {
             let offset = i
                 .checked_mul(stride)
                 .ok_or_else(|| GltfImportError::Accessor("COLOR_0 stride overflow".into()))?;
             let rgb = match accessor.component_type {
-                COMPONENT_FLOAT => {
-                    let need = components * 4;
-                    if offset + need > slice.len() {
-                        return Err(GltfImportError::Truncated);
-                    }
-                    [
-                        read_f32(slice, offset)?,
-                        read_f32(slice, offset + 4)?,
-                        read_f32(slice, offset + 8)?,
-                    ]
-                }
-                COMPONENT_UNSIGNED_BYTE if accessor.normalized => {
-                    if offset + components > slice.len() {
-                        return Err(GltfImportError::Truncated);
-                    }
-                    [
-                        slice[offset] as f32 / 255.0,
-                        slice[offset + 1] as f32 / 255.0,
-                        slice[offset + 2] as f32 / 255.0,
-                    ]
-                }
-                COMPONENT_UNSIGNED_SHORT if accessor.normalized => {
-                    let need = components * 2;
-                    if offset + need > slice.len() {
-                        return Err(GltfImportError::Truncated);
-                    }
-                    [
-                        read_u16(slice, offset)? as f32 / 65535.0,
-                        read_u16(slice, offset + 2)? as f32 / 65535.0,
-                        read_u16(slice, offset + 4)? as f32 / 65535.0,
-                    ]
-                }
-                _ => {
-                    return Err(GltfImportError::Unsupported("COLOR_0 component type"));
-                }
+                COMPONENT_FLOAT => [
+                    read_f32(slice, offset)?,
+                    read_f32(slice, offset + 4)?,
+                    read_f32(slice, offset + 8)?,
+                ],
+                COMPONENT_UNSIGNED_BYTE if accessor.normalized => [
+                    slice[offset] as f32 / 255.0,
+                    slice[offset + 1] as f32 / 255.0,
+                    slice[offset + 2] as f32 / 255.0,
+                ],
+                COMPONENT_UNSIGNED_SHORT if accessor.normalized => [
+                    read_u16(slice, offset)? as f32 / 65535.0,
+                    read_u16(slice, offset + 2)? as f32 / 65535.0,
+                    read_u16(slice, offset + 4)? as f32 / 65535.0,
+                ],
+                _ => return Err(GltfImportError::Unsupported("COLOR_0 component type")),
             };
             if !rgb.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)) {
                 return Err(GltfImportError::Accessor(
@@ -652,7 +722,12 @@ impl Document {
         Ok(out)
     }
 
-    fn read_indices(&self, bin: &[u8], index: usize) -> Result<Vec<u32>, GltfImportError> {
+    fn read_indices(
+        &self,
+        bin: &[u8],
+        index: usize,
+        budget: &mut DecodeBudget,
+    ) -> Result<Vec<u32>, GltfImportError> {
         let accessor = self.accessor(index, "indices")?;
         if accessor.type_name != "SCALAR" {
             return Err(GltfImportError::Accessor("indices must be SCALAR".into()));
@@ -662,9 +737,19 @@ impl Document {
                 "indices must not be normalized".into(),
             ));
         }
-        let (slice, stride) = self.view_slice(bin, accessor, "indices")?;
-        let mut out = Vec::with_capacity(accessor.count);
-        for i in 0..accessor.count {
+        let count = Self::bounded_count(accessor, "indices", MAX_MESH_INDICES, None)?;
+        if !count.is_multiple_of(3) {
+            return Err(GltfImportError::Capacity);
+        }
+        let element_width = match accessor.component_type {
+            COMPONENT_UNSIGNED_BYTE => 1,
+            COMPONENT_UNSIGNED_SHORT => 2,
+            COMPONENT_UNSIGNED_INT => 4,
+            _ => return Err(GltfImportError::Unsupported("index component type")),
+        };
+        let (slice, stride) = self.view_slice(bin, accessor, "indices", element_width)?;
+        let mut out = budget.reserve_vec(count)?;
+        for i in 0..count {
             let offset = i
                 .checked_mul(stride)
                 .ok_or_else(|| GltfImportError::Accessor("indices stride overflow".into()))?;
@@ -687,9 +772,7 @@ impl Document {
                     }
                     read_u32(slice, offset)?
                 }
-                _ => {
-                    return Err(GltfImportError::Unsupported("index component type"));
-                }
+                _ => return Err(GltfImportError::Unsupported("index component type")),
             };
             out.push(value);
         }
@@ -754,10 +837,7 @@ fn parse_primitive(value: Value) -> Result<Primitive, GltfImportError> {
         .ok_or_else(|| GltfImportError::Json("primitive.attributes missing".into()))?;
     let mut attributes = Attributes::default();
     for (key, value) in attributes_value {
-        let index = value
-            .as_u64()
-            .ok_or_else(|| GltfImportError::Json(format!("attribute {key} index must be u64")))?
-            as usize;
+        let index = json_usize(value, &format!("attribute {key} index"))?;
         match key.as_str() {
             "POSITION" => attributes.position = Some(index),
             "NORMAL" => attributes.normal = Some(index),
@@ -775,29 +855,21 @@ fn parse_primitive(value: Value) -> Result<Primitive, GltfImportError> {
     }
     let indices = object
         .get("indices")
-        .map(|value| {
-            value
-                .as_u64()
-                .map(|v| v as usize)
-                .ok_or_else(|| GltfImportError::Json("indices must be u64".into()))
-        })
+        .map(|value| json_usize(value, "indices"))
         .transpose()?;
     let material = object
         .get("material")
-        .map(|value| {
-            value
-                .as_u64()
-                .map(|v| v as usize)
-                .ok_or_else(|| GltfImportError::Json("material must be u64".into()))
-        })
+        .map(|value| json_usize(value, "material"))
         .transpose()?;
     let mode = object
         .get("mode")
         .map(|value| {
             value
                 .as_u64()
-                .map(|v| v as u32)
                 .ok_or_else(|| GltfImportError::Json("mode must be u64".into()))
+                .and_then(|v| {
+                    u32::try_from(v).map_err(|_| GltfImportError::Json("mode exceeds u32".into()))
+                })
         })
         .transpose()?
         .unwrap_or(MODE_TRIANGLES);
@@ -819,26 +891,25 @@ fn parse_accessor(value: Value) -> Result<Accessor, GltfImportError> {
     Ok(Accessor {
         buffer_view: object
             .get("bufferView")
-            .map(|value| {
-                value
-                    .as_u64()
-                    .map(|v| v as usize)
-                    .ok_or_else(|| GltfImportError::Json("bufferView must be u64".into()))
-            })
+            .map(|value| json_usize(value, "bufferView"))
             .transpose()?,
         byte_offset: object
             .get("byteOffset")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize,
+            .map(|value| json_usize(value, "byteOffset"))
+            .transpose()?
+            .unwrap_or(0),
         component_type: object
             .get("componentType")
             .and_then(Value::as_u64)
             .ok_or_else(|| GltfImportError::Json("componentType missing".into()))?
-            as u32,
-        count: object
-            .get("count")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| GltfImportError::Json("count missing".into()))? as usize,
+            .try_into()
+            .map_err(|_| GltfImportError::Json("componentType exceeds u32".into()))?,
+        count: json_usize(
+            object
+                .get("count")
+                .ok_or_else(|| GltfImportError::Json("count missing".into()))?,
+            "count",
+        )?,
         type_name: object
             .get("type")
             .and_then(Value::as_str)
@@ -858,26 +929,22 @@ fn parse_buffer_view(value: Value) -> Result<BufferView, GltfImportError> {
     Ok(BufferView {
         buffer: object
             .get("buffer")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| GltfImportError::Json("bufferView.buffer missing".into()))?
-            as usize,
+            .map(|value| json_usize(value, "bufferView.buffer"))
+            .transpose()?
+            .ok_or_else(|| GltfImportError::Json("bufferView.buffer missing".into()))?,
         byte_offset: object
             .get("byteOffset")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize,
+            .map(|value| json_usize(value, "bufferView.byteOffset"))
+            .transpose()?
+            .unwrap_or(0),
         byte_length: object
             .get("byteLength")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| GltfImportError::Json("byteLength missing".into()))?
-            as usize,
+            .map(|value| json_usize(value, "bufferView.byteLength"))
+            .transpose()?
+            .ok_or_else(|| GltfImportError::Json("byteLength missing".into()))?,
         byte_stride: object
             .get("byteStride")
-            .map(|value| {
-                value
-                    .as_u64()
-                    .map(|v| v as usize)
-                    .ok_or_else(|| GltfImportError::Json("byteStride must be u64".into()))
-            })
+            .map(|value| json_usize(value, "bufferView.byteStride"))
             .transpose()?,
     })
 }
@@ -889,11 +956,19 @@ fn parse_buffer(value: Value) -> Result<BufferDesc, GltfImportError> {
     Ok(BufferDesc {
         byte_length: object
             .get("byteLength")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| GltfImportError::Json("buffer.byteLength missing".into()))?
-            as usize,
+            .map(|value| json_usize(value, "buffer.byteLength"))
+            .transpose()?
+            .ok_or_else(|| GltfImportError::Json("buffer.byteLength missing".into()))?,
         uri: object.get("uri").and_then(Value::as_str).map(str::to_owned),
     })
+}
+
+fn json_usize(value: &Value, label: &str) -> Result<usize, GltfImportError> {
+    let value = value
+        .as_u64()
+        .ok_or_else(|| GltfImportError::Json(format!("{label} must be u64")))?;
+    usize::try_from(value)
+        .map_err(|_| GltfImportError::Json(format!("{label} exceeds platform usize")))
 }
 
 fn parse_material(value: Value) -> Result<Material, GltfImportError> {
@@ -967,7 +1042,7 @@ fn read_f32(bytes: &[u8], offset: usize) -> Result<f32, GltfImportError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GltfImportError, ImportedGeometry, import_static_glb};
+    use super::{DecodeBudget, GltfImportError, ImportedGeometry, import_static_glb};
     use std::io::Write;
 
     fn pad4(len: usize) -> usize {
@@ -1135,5 +1210,95 @@ mod tests {
             import_static_glb(&build_glb(json, &bin)).unwrap_err(),
             GltfImportError::Unsupported("external buffer URI")
         ));
+    }
+
+    #[test]
+    fn rejects_maximum_position_count_before_allocation() {
+        let json = format!(
+            r#"{{
+              "asset":{{"version":"2.0"}},
+              "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],
+              "accessors":[{{"bufferView":0,"componentType":5126,"count":{},"type":"VEC3"}}],
+              "bufferViews":[{{"buffer":0,"byteLength":1}}],
+              "buffers":[{{"byteLength":1}}]
+            }}"#,
+            u64::MAX
+        );
+        let result = std::panic::catch_unwind(|| import_static_glb(&build_glb(&json, &[0])));
+        assert!(matches!(
+            result.expect("hostile count must return an error, not panic"),
+            Err(GltfImportError::Capacity | GltfImportError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_impossible_position_span_before_reserving() {
+        let json = r#"{
+          "asset":{"version":"2.0"},
+          "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+          "accessors":[{"bufferView":0,"componentType":5126,"count":1000000,"type":"VEC3"}],
+          "bufferViews":[{"buffer":0,"byteLength":1}],
+          "buffers":[{"byteLength":1}]
+        }"#;
+        assert_eq!(
+            import_static_glb(&build_glb(json, &[0])).unwrap_err(),
+            GltfImportError::Truncated
+        );
+    }
+
+    #[test]
+    fn rejects_maximum_index_count_before_allocation() {
+        let mut bin = vec![0u8; 36];
+        bin.push(0);
+        let json = format!(
+            r#"{{
+              "asset":{{"version":"2.0"}},
+              "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"indices":1}}]}}],
+              "accessors":[
+                {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}},
+                {{"bufferView":1,"componentType":5121,"count":{},"type":"SCALAR"}}
+              ],
+              "bufferViews":[
+                {{"buffer":0,"byteLength":36}},
+                {{"buffer":0,"byteOffset":36,"byteLength":1}}
+              ],
+              "buffers":[{{"byteLength":37}}]
+            }}"#,
+            u64::MAX
+        );
+        let result = std::panic::catch_unwind(|| import_static_glb(&build_glb(&json, &bin)));
+        assert!(matches!(
+            result.expect("hostile index count must return an error, not panic"),
+            Err(GltfImportError::Capacity | GltfImportError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_accessor_span_overflow_before_allocation() {
+        let json = format!(
+            r#"{{
+              "asset":{{"version":"2.0"}},
+              "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],
+              "accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}}],
+              "bufferViews":[{{"buffer":0,"byteLength":12,"byteStride":{}}}],
+              "buffers":[{{"byteLength":12}}]
+            }}"#,
+            u64::MAX
+        );
+        let result = import_static_glb(&build_glb(&json, &[0; 12]));
+        assert!(matches!(
+            result,
+            Err(GltfImportError::Accessor(_) | GltfImportError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn cumulative_decode_budget_rejects_before_reserve() {
+        let mut budget = DecodeBudget { remaining: 4 };
+        assert!(matches!(
+            budget.reserve_vec::<u64>(1),
+            Err(GltfImportError::Capacity)
+        ));
+        assert_eq!(budget.remaining, 4);
     }
 }
