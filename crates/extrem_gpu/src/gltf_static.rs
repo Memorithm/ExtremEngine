@@ -837,14 +837,21 @@ fn parse_primitive(value: Value) -> Result<Primitive, GltfImportError> {
         .ok_or_else(|| GltfImportError::Json("primitive.attributes missing".into()))?;
     let mut attributes = Attributes::default();
     for (key, value) in attributes_value {
-        let index = json_usize(value, &format!("attribute {key} index"))?;
         match key.as_str() {
-            "POSITION" => attributes.position = Some(index),
-            "NORMAL" => attributes.normal = Some(index),
-            "TEXCOORD_0" => attributes.texcoord_0 = Some(index),
-            "COLOR_0" => attributes.color_0 = Some(index),
-            "JOINTS_0" => attributes.joints_0 = Some(index),
-            "WEIGHTS_0" => attributes.weights_0 = Some(index),
+            "POSITION" => {
+                attributes.position = Some(json_usize(value, "POSITION attribute index")?)
+            }
+            "NORMAL" => attributes.normal = Some(json_usize(value, "NORMAL attribute index")?),
+            "TEXCOORD_0" => {
+                attributes.texcoord_0 = Some(json_usize(value, "TEXCOORD_0 attribute index")?)
+            }
+            "COLOR_0" => attributes.color_0 = Some(json_usize(value, "COLOR_0 attribute index")?),
+            "JOINTS_0" => {
+                attributes.joints_0 = Some(json_usize(value, "JOINTS_0 attribute index")?)
+            }
+            "WEIGHTS_0" => {
+                attributes.weights_0 = Some(json_usize(value, "WEIGHTS_0 attribute index")?)
+            }
             "TEXCOORD_1" | "TANGENT" => {
                 return Err(GltfImportError::Unsupported("advanced mesh attributes"));
             }
@@ -1042,7 +1049,9 @@ fn read_f32(bytes: &[u8], offset: usize) -> Result<f32, GltfImportError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecodeBudget, GltfImportError, ImportedGeometry, import_static_glb};
+    use super::{
+        DecodeBudget, GltfImportError, ImportedGeometry, import_static_glb, parse_primitive,
+    };
     use std::io::Write;
 
     fn pad4(len: usize) -> usize {
@@ -1300,5 +1309,16 @@ mod tests {
             Err(GltfImportError::Capacity)
         ));
         assert_eq!(budget.remaining, 4);
+    }
+
+    #[test]
+    fn rejects_unknown_attribute_before_converting_its_value() {
+        let value = serde_json::json!({
+            "attributes": {"attacker-controlled-attribute": []}
+        });
+        assert_eq!(
+            parse_primitive(value).unwrap_err(),
+            GltfImportError::Unsupported("unknown primitive attribute")
+        );
     }
 }
