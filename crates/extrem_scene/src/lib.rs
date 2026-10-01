@@ -545,6 +545,12 @@ impl SceneDocument {
         }
 
         let mut count = 0usize;
+        let mut name_bytes = self.name.len();
+        if name_bytes > limits.max_bytes {
+            return Err(SceneFormatError::Invalid(
+                "scene names exceed aggregate byte budget".to_owned(),
+            ));
+        }
         let mut stack = Vec::new();
         stack
             .try_reserve_exact(self.roots.len())
@@ -567,6 +573,14 @@ impl SceneDocument {
             if node.name.len() > limits.max_name_bytes {
                 return Err(SceneFormatError::Invalid(
                     "node name exceeds byte limit".to_owned(),
+                ));
+            }
+            name_bytes = name_bytes.checked_add(node.name.len()).ok_or_else(|| {
+                SceneFormatError::Invalid("scene name byte count overflow".to_owned())
+            })?;
+            if name_bytes > limits.max_bytes {
+                return Err(SceneFormatError::Invalid(
+                    "scene names exceed aggregate byte budget".to_owned(),
                 ));
             }
             if !node.transform.is_valid() {
@@ -868,7 +882,7 @@ impl<'de> Visitor<'de> for SceneNodeVecVisitor<'_> {
             depth: self.depth,
         })? {
             nodes
-                .try_reserve_exact(1)
+                .try_reserve(1)
                 .map_err(|_| de::Error::custom("scene node allocation failed"))?;
             nodes.push(node);
         }
@@ -1434,6 +1448,24 @@ mod tests {
             document.instantiate_with_limits(&mut world, limits),
             Err(SceneInstantiationError::Format(SceneFormatError::Invalid(message)))
                 if message.contains("depth limit")
+        ));
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn direct_instantiation_enforces_aggregate_name_budget() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "root".to_owned(),
+            roots: vec![node("aaaa", Vec::new()), node("bbbb", Vec::new())],
+        };
+        let limits = SceneLoadLimits::new(8, 4, 4, 4).expect("limits");
+        let mut world = World::new();
+
+        assert!(matches!(
+            document.instantiate_with_limits(&mut world, limits),
+            Err(SceneInstantiationError::Format(SceneFormatError::Invalid(message)))
+                if message.contains("aggregate byte budget")
         ));
         assert_eq!(world.entity_count(), 0);
     }
