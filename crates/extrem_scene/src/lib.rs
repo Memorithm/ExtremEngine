@@ -1,6 +1,7 @@
 use extrem_ecs::{Entity, World, WorldError};
 use extrem_math::{Mat4, Transform, Vec3};
 use ron::ser::PrettyConfig;
+use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -12,6 +13,83 @@ pub use validation::{HierarchyValidationStats, HierarchyValidator, validate_hier
 
 const MAX_SCENE_NODES: usize = 1_000_000;
 const MAX_SCENE_DEPTH: usize = 256;
+const MAX_SCENE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SCENE_NAME_BYTES: usize = 4 * 1024;
+
+/// Hard and caller-reducible limits for untrusted scene loading.
+///
+/// The limits cannot be raised above the engine's hard safety envelope. This
+/// keeps a configured loader from accidentally disabling the boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneLoadLimits {
+    max_bytes: usize,
+    max_name_bytes: usize,
+    max_nodes: usize,
+    max_depth: usize,
+}
+
+impl Default for SceneLoadLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: MAX_SCENE_BYTES,
+            max_name_bytes: MAX_SCENE_NAME_BYTES,
+            max_nodes: MAX_SCENE_NODES,
+            max_depth: MAX_SCENE_DEPTH,
+        }
+    }
+}
+
+impl SceneLoadLimits {
+    pub fn new(
+        max_bytes: usize,
+        max_name_bytes: usize,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<Self, SceneFormatError> {
+        if max_bytes == 0 || max_bytes > MAX_SCENE_BYTES {
+            return Err(SceneFormatError::Invalid(format!(
+                "scene byte limit must be in 1..={MAX_SCENE_BYTES}"
+            )));
+        }
+        if max_name_bytes == 0 || max_name_bytes > MAX_SCENE_NAME_BYTES {
+            return Err(SceneFormatError::Invalid(format!(
+                "scene name limit must be in 1..={MAX_SCENE_NAME_BYTES}"
+            )));
+        }
+        if max_nodes == 0 || max_nodes > MAX_SCENE_NODES {
+            return Err(SceneFormatError::Invalid(format!(
+                "scene node limit must be in 1..={MAX_SCENE_NODES}"
+            )));
+        }
+        if max_depth > MAX_SCENE_DEPTH {
+            return Err(SceneFormatError::Invalid(format!(
+                "scene depth limit must be in 0..={MAX_SCENE_DEPTH}"
+            )));
+        }
+        Ok(Self {
+            max_bytes,
+            max_name_bytes,
+            max_nodes,
+            max_depth,
+        })
+    }
+
+    pub const fn max_bytes(self) -> usize {
+        self.max_bytes
+    }
+
+    pub const fn max_name_bytes(self) -> usize {
+        self.max_name_bytes
+    }
+
+    pub const fn max_nodes(self) -> usize {
+        self.max_nodes
+    }
+
+    pub const fn max_depth(self) -> usize {
+        self.max_depth
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Name(pub String);
@@ -280,7 +358,7 @@ pub struct SceneNode {
     pub children: Vec<Self>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SceneFormatError {
     Encode(String),
     Decode(String),
@@ -298,6 +376,37 @@ impl fmt::Display for SceneFormatError {
 }
 
 impl std::error::Error for SceneFormatError {}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SceneInstantiationError {
+    Format(SceneFormatError),
+    World(WorldError),
+    Capacity,
+}
+
+impl fmt::Display for SceneInstantiationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Format(error) => error.fmt(formatter),
+            Self::World(error) => error.fmt(formatter),
+            Self::Capacity => write!(formatter, "scene instantiation capacity exhausted"),
+        }
+    }
+}
+
+impl std::error::Error for SceneInstantiationError {}
+
+impl From<SceneFormatError> for SceneInstantiationError {
+    fn from(error: SceneFormatError) -> Self {
+        Self::Format(error)
+    }
+}
+
+impl From<WorldError> for SceneInstantiationError {
+    fn from(error: WorldError) -> Self {
+        Self::World(error)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scene {
@@ -373,36 +482,105 @@ impl Scene {
     }
 
     pub fn from_ron(text: &str, world: &mut World) -> Result<Self, SceneFormatError> {
-        let document: SceneDocument =
-            ron::from_str(text).map_err(|error| SceneFormatError::Decode(error.to_string()))?;
-        document.validate()?;
-        document.instantiate(world).map_err(|error| {
-            SceneFormatError::Decode(format!("could not instantiate scene: {error}"))
-        })
+        Self::from_ron_with_limits(text, world, SceneLoadLimits::default())
+    }
+
+    pub fn from_ron_with_limits(
+        text: &str,
+        world: &mut World,
+        limits: SceneLoadLimits,
+    ) -> Result<Self, SceneFormatError> {
+        if text.len() > limits.max_bytes {
+            return Err(SceneFormatError::Invalid(
+                "scene exceeds encoded byte limit".to_owned(),
+            ));
+        }
+
+        let ron_recursion_limit = limits.max_depth.saturating_mul(2).saturating_add(16);
+        let options = ron::Options::default().with_recursion_limit(ron_recursion_limit);
+        let mut state = SceneReadState::default();
+        let document = options
+            .from_str_seed(
+                text,
+                SceneDocumentSeed {
+                    limits: &limits,
+                    state: &mut state,
+                },
+            )
+            .map_err(|error| SceneFormatError::Decode(error.to_string()))?;
+        document.validate_with_limits(limits)?;
+        document
+            .instantiate_with_limits(world, limits)
+            .map_err(|error| {
+                SceneFormatError::Decode(format!("could not instantiate scene: {error}"))
+            })
     }
 }
 
 impl SceneDocument {
     pub fn validate(&self) -> Result<(), SceneFormatError> {
+        self.validate_with_limits(SceneLoadLimits::default())
+    }
+
+    pub fn validate_with_limits(&self, limits: SceneLoadLimits) -> Result<(), SceneFormatError> {
+        self.validated_node_count(limits).map(|_| ())
+    }
+
+    fn validated_node_count(&self, limits: SceneLoadLimits) -> Result<usize, SceneFormatError> {
         if self.format_version != 1 {
             return Err(SceneFormatError::Invalid(format!(
                 "unsupported scene format version {}",
                 self.format_version
             )));
         }
+        if self.name.len() > limits.max_name_bytes {
+            return Err(SceneFormatError::Invalid(
+                "scene name exceeds byte limit".to_owned(),
+            ));
+        }
+        if self.roots.len() > limits.max_nodes {
+            return Err(SceneFormatError::Invalid(
+                "scene exceeds node limit".to_owned(),
+            ));
+        }
 
         let mut count = 0usize;
-        let mut stack: Vec<(&SceneNode, usize)> = self.roots.iter().map(|node| (node, 0)).collect();
+        let mut name_bytes = self.name.len();
+        if name_bytes > limits.max_bytes {
+            return Err(SceneFormatError::Invalid(
+                "scene names exceed aggregate byte budget".to_owned(),
+            ));
+        }
+        let mut stack = Vec::new();
+        stack
+            .try_reserve_exact(self.roots.len())
+            .map_err(|_| SceneFormatError::Invalid("scene capacity exhausted".to_owned()))?;
+        stack.extend(self.roots.iter().map(|node| (node, 0usize)));
         while let Some((node, depth)) = stack.pop() {
-            count = count.saturating_add(1);
-            if count > MAX_SCENE_NODES {
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| SceneFormatError::Invalid("scene node count overflow".to_owned()))?;
+            if count > limits.max_nodes {
                 return Err(SceneFormatError::Invalid(
                     "scene exceeds node limit".to_owned(),
                 ));
             }
-            if depth > MAX_SCENE_DEPTH {
+            if depth > limits.max_depth {
                 return Err(SceneFormatError::Invalid(
                     "scene exceeds hierarchy depth limit".to_owned(),
+                ));
+            }
+            if node.name.len() > limits.max_name_bytes {
+                return Err(SceneFormatError::Invalid(
+                    "node name exceeds byte limit".to_owned(),
+                ));
+            }
+            name_bytes = name_bytes.checked_add(node.name.len()).ok_or_else(|| {
+                SceneFormatError::Invalid("scene name byte count overflow".to_owned())
+            })?;
+            if name_bytes > limits.max_bytes {
+                return Err(SceneFormatError::Invalid(
+                    "scene names exceed aggregate byte budget".to_owned(),
                 ));
             }
             if !node.transform.is_valid() {
@@ -411,17 +589,574 @@ impl SceneDocument {
                     node.name
                 )));
             }
+            stack.try_reserve(node.children.len()).map_err(|_| {
+                SceneFormatError::Invalid("scene traversal capacity exhausted".to_owned())
+            })?;
             stack.extend(node.children.iter().map(|child| (child, depth + 1)));
+        }
+        Ok(count)
+    }
+
+    pub fn instantiate(&self, world: &mut World) -> Result<Scene, SceneInstantiationError> {
+        self.instantiate_with_limits(world, SceneLoadLimits::default())
+    }
+
+    pub fn instantiate_with_limits(
+        &self,
+        world: &mut World,
+        limits: SceneLoadLimits,
+    ) -> Result<Scene, SceneInstantiationError> {
+        let node_count = self.validated_node_count(limits)?;
+        let name = clone_string_fallibly(&self.name)?;
+        let plan = build_instantiation_plan(self, node_count)?;
+        instantiate_plan(world, name, plan, self.roots.len(), node_count)
+    }
+}
+
+#[derive(Default)]
+struct SceneReadState {
+    nodes: usize,
+    decoded_name_bytes: usize,
+}
+
+impl SceneReadState {
+    fn begin_node<E: de::Error>(&mut self, limits: &SceneLoadLimits) -> Result<(), E> {
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .ok_or_else(|| E::custom("scene node count overflow"))?;
+        if self.nodes > limits.max_nodes {
+            return Err(E::custom("scene exceeds node limit while decoding"));
         }
         Ok(())
     }
 
-    pub fn instantiate(&self, world: &mut World) -> Result<Scene, WorldError> {
-        let mut scene = Scene::new(&self.name);
-        for node in &self.roots {
-            instantiate_node(&mut scene, world, None, node)?;
+    fn register_name<E: de::Error>(
+        &mut self,
+        len: usize,
+        limits: &SceneLoadLimits,
+    ) -> Result<(), E> {
+        if len > limits.max_name_bytes {
+            return Err(E::custom("scene name exceeds byte limit while decoding"));
         }
-        Ok(scene)
+        self.decoded_name_bytes = self
+            .decoded_name_bytes
+            .checked_add(len)
+            .ok_or_else(|| E::custom("decoded scene name budget overflow"))?;
+        if self.decoded_name_bytes > limits.max_bytes {
+            return Err(E::custom("decoded scene names exceed load budget"));
+        }
+        Ok(())
+    }
+}
+
+struct BoundedStringSeed<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+}
+
+impl<'de> DeserializeSeed<'de> for BoundedStringSeed<'_> {
+    type Value = String;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_string(BoundedStringVisitor {
+            limits: self.limits,
+            state: self.state,
+        })
+    }
+}
+
+struct BoundedStringVisitor<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+}
+
+impl<'de> Visitor<'de> for BoundedStringVisitor<'_> {
+    type Value = String;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a scene name no longer than {} bytes",
+            self.limits.max_name_bytes
+        )
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(value)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.state.register_name::<E>(value.len(), self.limits)?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(value.len())
+            .map_err(|_| E::custom("scene name allocation failed"))?;
+        owned.push_str(value);
+        Ok(owned)
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.state.register_name::<E>(value.len(), self.limits)?;
+        Ok(value)
+    }
+}
+
+struct SceneDocumentSeed<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+}
+
+impl<'de> DeserializeSeed<'de> for SceneDocumentSeed<'_> {
+    type Value = SceneDocument;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_struct(
+            "SceneDocument",
+            &["format_version", "name", "roots"],
+            SceneDocumentVisitor {
+                limits: self.limits,
+                state: self.state,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(field_identifier)]
+enum SceneDocumentField {
+    #[serde(rename = "format_version")]
+    FormatVersion,
+    #[serde(rename = "name")]
+    Name,
+    #[serde(rename = "roots")]
+    Roots,
+    #[serde(other)]
+    Ignore,
+}
+
+struct SceneDocumentVisitor<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+}
+
+impl<'de> Visitor<'de> for SceneDocumentVisitor<'_> {
+    type Value = SceneDocument;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a bounded SceneDocument")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let format_version = sequence
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        let name = sequence
+            .next_element_seed(BoundedStringSeed {
+                limits: self.limits,
+                state: self.state,
+            })?
+            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+        let roots = sequence
+            .next_element_seed(SceneNodeVecSeed {
+                limits: self.limits,
+                state: self.state,
+                depth: 0,
+            })?
+            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+        Ok(SceneDocument {
+            format_version,
+            name,
+            roots,
+        })
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut format_version = None;
+        let mut name = None;
+        let mut roots = None;
+        while let Some(field) = map.next_key()? {
+            match field {
+                SceneDocumentField::FormatVersion => {
+                    if format_version.is_some() {
+                        return Err(de::Error::duplicate_field("format_version"));
+                    }
+                    format_version = Some(map.next_value()?);
+                }
+                SceneDocumentField::Name => {
+                    if name.is_some() {
+                        return Err(de::Error::duplicate_field("name"));
+                    }
+                    name = Some(map.next_value_seed(BoundedStringSeed {
+                        limits: self.limits,
+                        state: self.state,
+                    })?);
+                }
+                SceneDocumentField::Roots => {
+                    if roots.is_some() {
+                        return Err(de::Error::duplicate_field("roots"));
+                    }
+                    roots = Some(map.next_value_seed(SceneNodeVecSeed {
+                        limits: self.limits,
+                        state: self.state,
+                        depth: 0,
+                    })?);
+                }
+                SceneDocumentField::Ignore => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(SceneDocument {
+            format_version: format_version
+                .ok_or_else(|| de::Error::missing_field("format_version"))?,
+            name: name.ok_or_else(|| de::Error::missing_field("name"))?,
+            roots: roots.ok_or_else(|| de::Error::missing_field("roots"))?,
+        })
+    }
+}
+
+struct SceneNodeVecSeed<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+    depth: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for SceneNodeVecSeed<'_> {
+    type Value = Vec<SceneNode>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(SceneNodeVecVisitor {
+            limits: self.limits,
+            state: self.state,
+            depth: self.depth,
+        })
+    }
+}
+
+struct SceneNodeVecVisitor<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+    depth: usize,
+}
+
+impl<'de> Visitor<'de> for SceneNodeVecVisitor<'_> {
+    type Value = Vec<SceneNode>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a bounded sequence of scene nodes")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut nodes = Vec::new();
+        while let Some(node) = sequence.next_element_seed(SceneNodeSeed {
+            limits: self.limits,
+            state: self.state,
+            depth: self.depth,
+        })? {
+            nodes
+                .try_reserve(1)
+                .map_err(|_| de::Error::custom("scene node allocation failed"))?;
+            nodes.push(node);
+        }
+        Ok(nodes)
+    }
+}
+
+struct SceneNodeSeed<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+    depth: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for SceneNodeSeed<'_> {
+    type Value = SceneNode;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if self.depth > self.limits.max_depth {
+            return Err(de::Error::custom(
+                "scene exceeds hierarchy depth limit while decoding",
+            ));
+        }
+        self.state.begin_node::<D::Error>(self.limits)?;
+        deserializer.deserialize_struct(
+            "SceneNode",
+            &["name", "transform", "visible", "children"],
+            SceneNodeVisitor {
+                limits: self.limits,
+                state: self.state,
+                depth: self.depth,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(field_identifier)]
+enum SceneNodeField {
+    #[serde(rename = "name")]
+    Name,
+    #[serde(rename = "transform")]
+    Transform,
+    #[serde(rename = "visible")]
+    Visible,
+    #[serde(rename = "children")]
+    Children,
+    #[serde(other)]
+    Ignore,
+}
+
+struct SceneNodeVisitor<'a> {
+    limits: &'a SceneLoadLimits,
+    state: &'a mut SceneReadState,
+    depth: usize,
+}
+
+impl<'de> Visitor<'de> for SceneNodeVisitor<'_> {
+    type Value = SceneNode;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a bounded SceneNode")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let name = sequence
+            .next_element_seed(BoundedStringSeed {
+                limits: self.limits,
+                state: self.state,
+            })?
+            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        let transform = sequence
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+        let visible = sequence
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+        let children = sequence
+            .next_element_seed(SceneNodeVecSeed {
+                limits: self.limits,
+                state: self.state,
+                depth: self.depth.saturating_add(1),
+            })?
+            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+        Ok(SceneNode {
+            name,
+            transform,
+            visible,
+            children,
+        })
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut name = None;
+        let mut transform = None;
+        let mut visible = None;
+        let mut children = None;
+        while let Some(field) = map.next_key()? {
+            match field {
+                SceneNodeField::Name => {
+                    if name.is_some() {
+                        return Err(de::Error::duplicate_field("name"));
+                    }
+                    name = Some(map.next_value_seed(BoundedStringSeed {
+                        limits: self.limits,
+                        state: self.state,
+                    })?);
+                }
+                SceneNodeField::Transform => {
+                    if transform.is_some() {
+                        return Err(de::Error::duplicate_field("transform"));
+                    }
+                    transform = Some(map.next_value()?);
+                }
+                SceneNodeField::Visible => {
+                    if visible.is_some() {
+                        return Err(de::Error::duplicate_field("visible"));
+                    }
+                    visible = Some(map.next_value()?);
+                }
+                SceneNodeField::Children => {
+                    if children.is_some() {
+                        return Err(de::Error::duplicate_field("children"));
+                    }
+                    children = Some(map.next_value_seed(SceneNodeVecSeed {
+                        limits: self.limits,
+                        state: self.state,
+                        depth: self.depth.saturating_add(1),
+                    })?);
+                }
+                SceneNodeField::Ignore => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(SceneNode {
+            name: name.ok_or_else(|| de::Error::missing_field("name"))?,
+            transform: transform.ok_or_else(|| de::Error::missing_field("transform"))?,
+            visible: visible.ok_or_else(|| de::Error::missing_field("visible"))?,
+            children: children.ok_or_else(|| de::Error::missing_field("children"))?,
+        })
+    }
+}
+
+struct PlannedSceneNode {
+    parent_index: Option<usize>,
+    name: String,
+    transform: Transform,
+    visible: bool,
+    children: Vec<Entity>,
+}
+
+fn build_instantiation_plan(
+    document: &SceneDocument,
+    node_count: usize,
+) -> Result<Vec<PlannedSceneNode>, SceneInstantiationError> {
+    let mut pending = Vec::new();
+    pending
+        .try_reserve_exact(node_count)
+        .map_err(|_| SceneInstantiationError::Capacity)?;
+    for node in document.roots.iter().rev() {
+        pending.push((None, node));
+    }
+
+    let mut plan = Vec::new();
+    plan.try_reserve_exact(node_count)
+        .map_err(|_| SceneInstantiationError::Capacity)?;
+    while let Some((parent_index, node)) = pending.pop() {
+        let plan_index = plan.len();
+        let mut children = Vec::new();
+        children
+            .try_reserve_exact(node.children.len())
+            .map_err(|_| SceneInstantiationError::Capacity)?;
+        plan.push(PlannedSceneNode {
+            parent_index,
+            name: clone_string_fallibly(&node.name)?,
+            transform: node.transform,
+            visible: node.visible,
+            children,
+        });
+        for child in node.children.iter().rev() {
+            pending.push((Some(plan_index), child));
+        }
+    }
+    Ok(plan)
+}
+
+fn clone_string_fallibly(value: &str) -> Result<String, SceneInstantiationError> {
+    let mut cloned = String::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| SceneInstantiationError::Capacity)?;
+    cloned.push_str(value);
+    Ok(cloned)
+}
+
+fn instantiate_plan(
+    world: &mut World,
+    name: String,
+    plan: Vec<PlannedSceneNode>,
+    root_count: usize,
+    spawn_limit: usize,
+) -> Result<Scene, SceneInstantiationError> {
+    let mut entities = Vec::new();
+    entities
+        .try_reserve_exact(plan.len())
+        .map_err(|_| SceneInstantiationError::Capacity)?;
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(root_count)
+        .map_err(|_| SceneInstantiationError::Capacity)?;
+
+    for planned in plan {
+        if entities.len() >= spawn_limit {
+            rollback_created_entities(world, &entities);
+            return Err(SceneInstantiationError::Capacity);
+        }
+        let entity = match world.try_spawn_empty() {
+            Ok(entity) => entity,
+            Err(error) => {
+                rollback_created_entities(world, &entities);
+                return Err(error.into());
+            }
+        };
+        entities.push(entity);
+
+        let result = (|| -> Result<(), WorldError> {
+            world.insert(entity, Name(planned.name))?;
+            world.insert(entity, planned.transform)?;
+            world.insert(entity, GlobalTransform(planned.transform))?;
+            world.insert(entity, Visibility(planned.visible))?;
+            world.insert(entity, Children(planned.children))?;
+            if let Some(parent_index) = planned.parent_index {
+                let parent = entities[parent_index];
+                world.insert(entity, Parent(parent))?;
+                world
+                    .get_mut::<Children>(parent)
+                    .ok_or(WorldError::EntityNotFound(parent))?
+                    .0
+                    .push(entity);
+            } else {
+                roots.push(entity);
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            rollback_created_entities(world, &entities);
+            return Err(error.into());
+        }
+    }
+
+    Ok(Scene { name, roots })
+}
+
+fn rollback_created_entities(world: &mut World, entities: &[Entity]) {
+    for entity in entities.iter().rev().copied() {
+        if !world.contains(entity) {
+            continue;
+        }
+        if let Some(Parent(parent)) = world.get::<Parent>(entity).copied() {
+            if let Some(children) = world.get_mut::<Children>(parent) {
+                children.0.retain(|child| *child != entity);
+            }
+        }
+        let _ = world.despawn(entity);
     }
 }
 
@@ -455,31 +1190,25 @@ fn snapshot_node(
     })
 }
 
-fn instantiate_node(
-    scene: &mut Scene,
-    world: &mut World,
-    parent: Option<Entity>,
-    node: &SceneNode,
-) -> Result<Entity, WorldError> {
-    let entity = match parent {
-        Some(parent) => scene.spawn_child(world, parent, &node.name, node.transform)?,
-        None => scene.spawn_entity(world, &node.name, node.transform)?,
-    };
-    world.insert(entity, Visibility(node.visible))?;
-    for child in &node.children {
-        instantiate_node(scene, world, Some(entity), child)?;
-    }
-    Ok(entity)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        Children, GlobalTransform, HierarchyError, Parent, Scene, despawn_recursive, detach,
+        Children, GlobalTransform, HierarchyError, Name, Parent, Scene, SceneDocument,
+        SceneFormatError, SceneInstantiationError, SceneLoadLimits, SceneNode, Visibility,
+        build_instantiation_plan, despawn_recursive, detach, instantiate_plan,
         propagate_transforms, set_parent, validate_hierarchy,
     };
     use extrem_ecs::World;
     use extrem_math::{Quat, Transform, Vec3};
+
+    fn node(name: &str, children: Vec<SceneNode>) -> SceneNode {
+        SceneNode {
+            name: name.to_owned(),
+            transform: Transform::IDENTITY,
+            visible: true,
+            children,
+        }
+    }
 
     #[test]
     fn child_global_transform_inherits_parent_rotation_translation_and_scale() {
@@ -616,5 +1345,151 @@ mod tests {
                 .map(|children| children.0.len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn direct_instantiation_validates_before_world_mutation() {
+        let document = SceneDocument {
+            format_version: 2,
+            name: "invalid".to_owned(),
+            roots: vec![node("root", Vec::new())],
+        };
+        let mut world = World::new();
+        let sentinel = world.spawn(Name("sentinel".to_owned()));
+        let count_before = world.entity_count();
+
+        assert!(matches!(
+            document.instantiate(&mut world),
+            Err(SceneInstantiationError::Format(SceneFormatError::Invalid(
+                _
+            )))
+        ));
+        assert_eq!(world.entity_count(), count_before);
+        assert_eq!(
+            world.get::<Name>(sentinel).map(|name| name.0.as_str()),
+            Some("sentinel")
+        );
+    }
+
+    #[test]
+    fn flat_node_limit_is_enforced_during_decode() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "flat".to_owned(),
+            roots: vec![
+                node("one", Vec::new()),
+                node("two", Vec::new()),
+                node("three", Vec::new()),
+            ],
+        };
+        let encoded = ron::ser::to_string(&document).expect("encode test document");
+        let limits = SceneLoadLimits::new(encoded.len(), 32, 2, 4).expect("limits");
+        let mut world = World::new();
+
+        assert!(matches!(
+            Scene::from_ron_with_limits(&encoded, &mut world, limits),
+            Err(SceneFormatError::Decode(message))
+                if message.contains("node limit while decoding")
+        ));
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn encoded_byte_limit_rejects_before_decode() {
+        let limits = SceneLoadLimits::new(16, 16, 4, 4).expect("limits");
+        let mut world = World::new();
+
+        assert_eq!(
+            Scene::from_ron_with_limits(
+                "this input is longer than sixteen bytes",
+                &mut world,
+                limits
+            ),
+            Err(SceneFormatError::Invalid(
+                "scene exceeds encoded byte limit".to_owned()
+            ))
+        );
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn name_limit_is_enforced_during_decode() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "oversized".to_owned(),
+            roots: Vec::new(),
+        };
+        let encoded = ron::ser::to_string(&document).expect("encode test document");
+        let limits = SceneLoadLimits::new(encoded.len(), 4, 4, 4).expect("limits");
+        let mut world = World::new();
+
+        assert!(matches!(
+            Scene::from_ron_with_limits(&encoded, &mut world, limits),
+            Err(SceneFormatError::Decode(message))
+                if message.contains("name exceeds byte limit while decoding")
+        ));
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn direct_instantiation_enforces_depth_without_recursion() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "deep".to_owned(),
+            roots: vec![node(
+                "root",
+                vec![node("child", vec![node("grandchild", Vec::new())])],
+            )],
+        };
+        let limits = SceneLoadLimits::new(1024, 32, 8, 1).expect("limits");
+        let mut world = World::new();
+
+        assert!(matches!(
+            document.instantiate_with_limits(&mut world, limits),
+            Err(SceneInstantiationError::Format(SceneFormatError::Invalid(message)))
+                if message.contains("depth limit")
+        ));
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn direct_instantiation_enforces_aggregate_name_budget() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "root".to_owned(),
+            roots: vec![node("aaaa", Vec::new()), node("bbbb", Vec::new())],
+        };
+        let limits = SceneLoadLimits::new(8, 4, 4, 4).expect("limits");
+        let mut world = World::new();
+
+        assert!(matches!(
+            document.instantiate_with_limits(&mut world, limits),
+            Err(SceneInstantiationError::Format(SceneFormatError::Invalid(message)))
+                if message.contains("aggregate byte budget")
+        ));
+        assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn mid_instantiation_failure_rolls_back_created_entities() {
+        let document = SceneDocument {
+            format_version: 1,
+            name: "rollback".to_owned(),
+            roots: vec![node("one", Vec::new()), node("two", Vec::new())],
+        };
+        let plan = build_instantiation_plan(&document, 2).expect("plan");
+        let mut world = World::new();
+        let sentinel = world.spawn(Name("sentinel".to_owned()));
+
+        assert_eq!(
+            instantiate_plan(&mut world, document.name.clone(), plan, 2, 1),
+            Err(SceneInstantiationError::Capacity)
+        );
+        assert_eq!(world.entity_count(), 1);
+        assert_eq!(
+            world.get::<Name>(sentinel).map(|name| name.0.as_str()),
+            Some("sentinel")
+        );
+        assert!(world.get::<Visibility>(sentinel).is_none());
     }
 }

@@ -32,8 +32,8 @@ pub use extrem_input::{ButtonInput, Input, KeyCode, MouseButton, MouseState};
 pub use extrem_physics::{BodyType, BoxCollider, Gravity, PhysicsPlugin, PhysicsStats, RigidBody};
 pub use extrem_scene::{
     Camera, Children, GlobalTransform, Name, Parent, Projection, Scene, SceneDocument,
-    SceneFormatError, SceneNode, TransformPropagationStats, TransformPropagator, Velocity,
-    Visibility,
+    SceneFormatError, SceneInstantiationError, SceneLoadLimits, SceneNode,
+    TransformPropagationStats, TransformPropagator, Velocity, Visibility,
 };
 pub use extrem_window::{WindowConfig, WindowError, WindowHost};
 
