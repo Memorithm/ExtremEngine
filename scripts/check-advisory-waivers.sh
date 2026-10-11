@@ -22,13 +22,26 @@ if grep -R --include=Cargo.toml -nE '(^|[[:space:]])ttf-parser[[:space:]]*=' Car
   exit 1
 fi
 
-tree="$(cargo tree -i ttf-parser --locked --edges normal)"
-printf '%s\n' "$tree"
-for expected in "ttf-parser" "ab_glyph" "sctk-adwaita" "winit" "extrem_window"; do
-  if ! grep -Fq "$expected" <<<"$tree"; then
-    echo "::error::${advisory_id} dependency-path evidence no longer contains ${expected}"
-    exit 1
-  fi
-done
+tree="$(
+  cargo tree -i ttf-parser --locked --edges normal --target all --prefix none --charset ascii \
+    | sed -E 's# \(/[^)]*/(crates/[^)]*)\)# (\1)#'
+)"
+expected_tree="$(cat <<'EOF'
+ttf-parser v0.25.1
+owned_ttf_parser v0.25.1
+ab_glyph v0.2.32
+sctk-adwaita v0.10.1
+winit v0.30.13
+extrem_window v0.1.0 (crates/extrem_window)
+extrem_engine v0.1.0 (crates/extrem_engine)
+EOF
+)"
 
-echo "${advisory_id} waiver valid through ${expiry}; dependency path remains decoration-only"
+printf '%s\n' "$tree"
+if [[ "$tree" != "$expected_tree" ]]; then
+  echo "::error::${advisory_id} reverse dependency graph changed; review every target and replace the exact allowlist"
+  diff -u <(printf '%s\n' "$expected_tree") <(printf '%s\n' "$tree") || true
+  exit 1
+fi
+
+echo "${advisory_id} waiver valid through ${expiry}; complete all-target reverse graph matches the reviewed allowlist"
