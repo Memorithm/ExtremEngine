@@ -70,7 +70,7 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    { id = "RUSTSEC-2026-0192", reason = "Transitive dependency of winit -> sctk-adwaita -> ab_glyph for font parsing. Mitigation: Input font files are not parsed directly from untrusted sources; used only for sctk window decoration. Planned removal when winit / sctk-adwaita update away from ab_glyph/ttf-parser." },
+    { id = "RUSTSEC-2026-0192", reason = "INFO/unmaintained advisory verified 2026-10-11. Owner: ExtremEngine maintainers. Tracking: https://github.com/Memorithm/ExtremEngine/issues/46. Scope: transitive winit -> sctk-adwaita -> ab_glyph decoration path only; no direct ExtremEngine dependency or caller-supplied font API. Valid through: 2026-12-31. Remove when the corrected graph is qualified; renewal requires a fresh primary-advisory and dependency-path review." },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
