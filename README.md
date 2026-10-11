@@ -2,9 +2,11 @@
 
 ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt privilégie des contrats explicites de sûreté, de validation numérique et d'ordre d'exécution là où le résultat dépend de l'ordre. Il ne revendique pas encore une sûreté universelle, un déterminisme inter-plateforme complet ni un niveau de production AAA.
 
-> Branche de développement actuelle : **`main`**.
-> La branche par défaut GitHub `agent/initial-engine` est en retard (LOD/DRS absents). Cloner avec :
-> `git clone --branch main https://github.com/Memorithm/ExtremEngine.git`
+> **Branche historique non autoritative.** `main` est conservée pour la traçabilité mais n'est pas le produit servi.
+> La branche GitHub par défaut et le trunk produit sont `agent/initial-engine`. Utilisez le README et un SHA exact de cette branche pour toute qualification :
+> https://github.com/Memorithm/ExtremEngine/tree/agent/initial-engine
+>
+> Les descriptions et commandes restantes de ce snapshot ne constituent pas une qualification de la version courante.
 
 ## Modules du workspace
 
@@ -28,7 +30,7 @@ ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt
 ## Validation
 
 ```bash
-git checkout main
+git checkout agent/initial-engine
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --all-targets --locked
