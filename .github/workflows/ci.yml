@@ -25,6 +25,8 @@ jobs:
         with:
           toolchain: stable
       - uses: EmbarkStudios/cargo-deny-action@9c67a826e39827395bfa619cd85cb2aaeb43cfaa # main
+      - name: Bounded Advisory Waiver
+        run: bash scripts/check-advisory-waivers.sh
       - name: Formatting Check
         run: cargo fmt --all -- --check
       - name: Clippy Lints

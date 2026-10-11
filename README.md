@@ -1,5 +1,9 @@
 # ExtremEngine
 
+> **Trunk produit autoritatif :** `agent/initial-engine`, qui est aussi la branche par défaut GitHub.
+> La branche `main` est un historique divergent non servi : ne pas la cloner ni la qualifier comme version courante.
+> Toute qualification doit citer le SHA exact exécuté sur `agent/initial-engine`.
+
 ExtremEngine est un moteur de jeu Rust modulaire **en construction**. Le dépôt privilégie des contrats explicites de sûreté, de validation numérique et d'ordre d'exécution là où le résultat dépend de l'ordre. Il ne revendique pas encore une sûreté universelle, un déterminisme inter-plateforme complet ni un niveau de production AAA.
 
 ## Modules du workspace
@@ -62,6 +66,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
 La CI vérifie également le MSRV Rust 1.87 et compile le workspace sur Linux, Windows et macOS. Les jobs Windows/macOS exécutent aussi les tests de l'éditeur, du moteur et du render graph. Linux exécute les exemples de documentation et le sandbox sans fenêtre. Une compilation réussie ne constitue pas à elle seule une validation matérielle du rendu WGPU; la présentation et les performances sur GPU réel doivent être qualifiées séparément.
+
+## Licence et provenance
+
+Les crates first-party de ce workspace déclarent `MIT OR Apache-2.0` : un destinataire peut choisir les termes complets de `LICENSE-MIT` ou `LICENSE-APACHE`. Cette déclaration ne couvre pas automatiquement les dépendances tierces, qui conservent leurs propres licences.
+
+La feature optionnelle `elastic-quality` consomme des crates ElasticXxx sous `PolyForm-Noncommercial-1.0.0`; l'activer ajoute donc ces obligations distinctes. `cargo deny check licenses sources` contrôle la politique déclarée et `docs/LICENSE_INVENTORY.md` fixe l'inventaire, les limites de provenance et le blocage de toute convergence future non autorisée.
 
 ## Documentation
 
